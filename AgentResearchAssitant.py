@@ -179,66 +179,59 @@ def create_styled_reference(output_dir: Path, figures_dir: Path):
     if not PPTX_AVAILABLE:
         print("⚠️  python-pptx not available. Install with: pip install python-pptx")
         print("   Using default PowerPoint styling instead.")
-        return
+        return None
     
     print("🎨 Creating styled presentation template...")
+    
+    # Start with a blank presentation
     prs = Presentation()
     prs.slide_width = Inches(10)
     prs.slide_height = Inches(7.5)
     
     # Define color scheme (professional blue theme)
     DARK_BLUE = RGBColor(31, 78, 121)
-    LIGHT_BLUE = RGBColor(68, 114, 196)
     ACCENT_BLUE = RGBColor(91, 155, 213)
-    WHITE = RGBColor(255, 255, 255)
     GRAY = RGBColor(89, 89, 89)
     
-    # Slide 1: Title Slide Layout
-    title_slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank
+    # Add one sample slide of each type Pandoc expects
+    # Slide 1: Title Slide
+    title_slide_layout = prs.slide_layouts[0]
+    slide1 = prs.slides.add_slide(title_slide_layout)
     
-    # Background with gradient effect (simulated with shapes)
-    background = title_slide.shapes.add_shape(
-        1,  # Rectangle
-        0, 0, prs.slide_width, prs.slide_height
-    )
-    background.fill.solid()
-    background.fill.fore_color.rgb = DARK_BLUE
-    background.line.fill.background()
+    # Customize title slide text
+    title = slide1.shapes.title
+    if title:
+        title.text = "Sample Title"
+        title.text_frame.paragraphs[0].font.size = Pt(44)
+        title.text_frame.paragraphs[0].font.color.rgb = DARK_BLUE
+        title.text_frame.paragraphs[0].font.bold = True
     
-    # Accent bar
-    accent = title_slide.shapes.add_shape(
-        1,
-        0, Inches(6.5), prs.slide_width, Inches(1)
-    )
-    accent.fill.solid()
-    accent.fill.fore_color.rgb = ACCENT_BLUE
-    accent.line.fill.background()
+    # Slide 2: Title and Content
+    content_slide_layout = prs.slide_layouts[1]
+    slide2 = prs.slides.add_slide(content_slide_layout)
     
-    # Slide 2: Content Slide Layout
-    content_slide = prs.slides.add_slide(prs.slide_layouts[6])
+    # Customize content slide
+    title2 = slide2.shapes.title
+    if title2:
+        title2.text = "Sample Slide"
+        title2.text_frame.paragraphs[0].font.size = Pt(32)
+        title2.text_frame.paragraphs[0].font.color.rgb = DARK_BLUE
+        title2.text_frame.paragraphs[0].font.bold = True
     
-    # Header bar
-    header = content_slide.shapes.add_shape(
-        1,
-        0, 0, prs.slide_width, Inches(1)
-    )
-    header.fill.solid()
-    header.fill.fore_color.rgb = DARK_BLUE
-    header.line.fill.background()
-    
-    # Content area background
-    content_bg = content_slide.shapes.add_shape(
-        1,
-        0, Inches(1), prs.slide_width, Inches(6.5)
-    )
-    content_bg.fill.solid()
-    content_bg.fill.fore_color.rgb = WHITE
-    content_bg.line.fill.background()
+    # Find and style the content placeholder
+    for shape in slide2.placeholders:
+        if shape.placeholder_format.type == 2:  # Body placeholder
+            tf = shape.text_frame
+            tf.text = "Sample bullet point"
+            for paragraph in tf.paragraphs:
+                paragraph.font.size = Pt(18)
+                paragraph.font.color.rgb = GRAY
     
     # Save reference template
     ref_path = output_dir / "reference_template.pptx"
     prs.save(str(ref_path))
     print(f"✅ Template created: {ref_path}")
+    return ref_path
 
 # ======================================================
 # 1. DATA LOADING & CLEANING
@@ -365,11 +358,15 @@ class DecisionMaker:
 
         YOUR TASK - Create a slide deck in Markdown format:
         
+        FIRST: Analyze the data context and identify the domain (e.g., sports, finance, healthcare, etc.)
+        
         STRUCTURE (Use # for slide titles):
         
         # [Title Slide - Catchy title based on data context]
         
         [Subtitle with context]
+        
+        **Domain Context Image**: [Describe what kind of image would represent this domain - be specific, e.g., "triathlon athlete crossing finish line", "stock market trading floor", "hospital emergency room"]
         
         ---
         
@@ -425,6 +422,7 @@ class DecisionMaker:
         - Place image AFTER the bullet points on each findings slide
         - Create ONE slide per figure
         - Use --- to separate slides
+        - Include the domain context image description for the title slide
         
         OTHER RULES:
         - Maximum 5 bullets per slide
@@ -554,10 +552,6 @@ class ReActAnalyzer:
         report_path.write_text(report_text, encoding='utf-8')
         print(f"✨ Analysis complete. Report saved to {report_path}")
         
-        # Print and save token usage
-        self.tracker.print_summary()
-        self.tracker.save_log(self.runner.output_dir)
-        
         return report_path, report_text
 
 # ======================================================
@@ -603,24 +597,63 @@ def main():
             pptx_md_path.write_text(pptx_content, encoding='utf-8')
             print(f"📊 Presentation markdown saved to {pptx_md_path}")
             
-            # Create reference document with styling
-            create_styled_reference(output_dir, runner.figures_dir)
-            reference_pptx = output_dir / "reference_template.pptx"
+            # Extract domain image suggestion from content
+            domain_image_match = re.search(r'\*\*Domain Context Image\*\*:\s*(.+?)(?:\n|$)', pptx_content)
+            if domain_image_match:
+                domain_context = domain_image_match.group(1).strip()
+                print(f"💡 Suggested title image: {domain_context}")
+                print(f"   → Search for this on Unsplash/Pexels and add to title slide manually")
             
-            # Convert to PPTX with styling and explicit resource path
-            subprocess.run(
-                [
-                    "pandoc", 
+            # Create reference document with styling
+            ref_path = create_styled_reference(output_dir, runner.figures_dir)
+            
+            # Build Pandoc command
+            pandoc_cmd = ["pandoc"]
+            
+            # Input file (must be relative to cwd)
+            pandoc_cmd.extend([str(pptx_md_path.name)])
+            
+            # Output format and file
+            pandoc_cmd.extend(["-t", "pptx", "-o", str(out_file.name)])
+            
+            # Add reference doc if template was created successfully
+            if ref_path and ref_path.exists():
+                pandoc_cmd.extend([f"--reference-doc={ref_path.name}"])
+            
+            # Resource path for images (absolute path is safer)
+            pandoc_cmd.extend([f"--resource-path=.:figures:{runner.figures_dir.absolute()}"])
+            
+            # Add standalone flag to ensure complete document
+            pandoc_cmd.append("--standalone")
+            
+            print(f"🔧 Running: {' '.join(pandoc_cmd)}")
+            
+            try:
+                result = subprocess.run(
+                    pandoc_cmd, 
+                    cwd=output_dir, 
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                print(f"✅ Presentation saved to {out_file}")
+            except subprocess.CalledProcessError as e:
+                print(f"❌ Pandoc error: {e}")
+                print(f"   stdout: {e.stdout}")
+                print(f"   stderr: {e.stderr}")
+                print(f"   Trying without reference doc...")
+                
+                # Fallback: try without reference doc
+                pandoc_cmd_simple = [
+                    "pandoc",
                     str(pptx_md_path.name),
-                    "-o", str(out_file.name),
                     "-t", "pptx",
-                    f"--reference-doc={reference_pptx.name}",
-                    f"--resource-path={runner.figures_dir.absolute()}"
-                ],
-                cwd=output_dir,
-                check=True
-            )
-            print(f"✅ Presentation saved to {out_file}")
+                    "-o", str(out_file.name),
+                    f"--resource-path=.:figures:{runner.figures_dir.absolute()}",
+                    "--standalone"
+                ]
+                subprocess.run(pandoc_cmd_simple, cwd=output_dir, check=True)
+                print(f"✅ Presentation saved to {out_file} (with default styling)")
         else:
             # For PDF and DOCX, use the full report
             subprocess.run(
@@ -628,6 +661,11 @@ def main():
                 cwd=output_dir
             )
             print(f"✅ Document saved to {out_file}")
+    
+    # Print token usage LAST (after all processing is complete)
+    print("\n" + "="*70)
+    tracker.print_summary()
+    tracker.save_log(output_dir)
 
 if __name__ == "__main__":
     main()
