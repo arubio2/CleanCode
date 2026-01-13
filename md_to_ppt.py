@@ -20,12 +20,34 @@ def parse_markdown(md_content):
     images = re.findall(r'!\[.*?\]\((.*?)\)', md_content)
     return md_content, images
 
+def estimate_text_capacity(placeholder):
+    """Estimates how many bullet points and characters a placeholder can hold."""
+    width_inches = placeholder.width / 914400
+    height_inches = placeholder.height / 914400
+    
+    # More aggressive estimation - typical slides can hold more text
+    # Assume ~10pt font, ~8-10 lines per inch vertically
+    # Each bullet takes about 0.3-0.35 inches with spacing
+    max_bullets = max(3, int(height_inches / 0.3))
+    
+    # Estimate max chars per bullet based on width
+    # At 10-12pt, you can fit roughly 15-18 chars per inch
+    max_chars_per_bullet = max(50, int(width_inches * 15))
+    
+    # Cap at reasonable maximums to maintain readability
+    max_bullets = min(max_bullets, 10)
+    max_chars_per_bullet = min(max_chars_per_bullet, 120)
+    
+    return max_bullets, max_chars_per_bullet
+
 def get_template_layouts(pptx_path):
     """Extracts detailed metadata from the template to help the LLM select layouts."""
     prs = Presentation(pptx_path)
     layouts = []
     for i, layout in enumerate(prs.slide_layouts):
         placeholders = []
+        text_capacity = None
+        
         for p in layout.placeholders:
             ph_info = {
                 "name": p.name,
@@ -36,12 +58,20 @@ def get_template_layouts(pptx_path):
                 "height": p.height
             }
             placeholders.append(ph_info)
+            
+            if p.placeholder_format.type in [PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT]:
+                max_bullets, max_chars = estimate_text_capacity(p)
+                text_capacity = {
+                    "max_bullets": max_bullets,
+                    "max_chars_per_bullet": max_chars
+                }
         
         layouts.append({
             "index": i,
             "name": layout.name,
             "placeholders": placeholders,
-            "placeholder_count": len(placeholders)
+            "placeholder_count": len(placeholders),
+            "text_capacity": text_capacity
         })
     return layouts
 
@@ -50,13 +80,11 @@ def auto_fit_text(text_frame, max_font_size=18, min_font_size=10):
     if not text_frame.text.strip():
         return
     
-    # Start with max font size and reduce if needed
     for size in range(max_font_size, min_font_size - 1, -1):
         for paragraph in text_frame.paragraphs:
             for run in paragraph.runs:
                 run.font.size = Pt(size)
         
-        # Check if text fits (this is approximate)
         if text_frame.text:
             break
 
@@ -64,18 +92,23 @@ def summarize_and_map_with_llm(md_content, layouts, image_list, api_key):
     """Consults the LLM to structure the report and pick the best template layouts."""
     client = OpenAI(api_key=api_key)
     
-    # Create more detailed layout descriptions
     layout_descriptions = []
     for l in layouts:
         ph_types = [p['type'] for p in l['placeholders']]
         has_picture = any('PICTURE' in t for t in ph_types)
         has_body = any('BODY' in t or 'OBJECT' in t for t in ph_types)
         
-        desc = f"- Index {l['index']}: '{l['name']}' ({l['placeholder_count']} placeholders)"
+        desc = f"- Index {l['index']}: '{l['name']}'"
+        
+        if l.get('text_capacity'):
+            cap = l['text_capacity']
+            desc += f" [Max: {cap['max_bullets']} bullets, {cap['max_chars_per_bullet']} chars/bullet]"
+        
         if has_picture:
-            desc += " [SUPPORTS IMAGES]"
+            desc += " [IMAGES]"
         if has_body:
-            desc += " [HAS TEXT BODY]"
+            desc += " [TEXT]"
+            
         layout_descriptions.append(desc)
     
     layout_context = "\n".join(layout_descriptions)
@@ -83,30 +116,34 @@ def summarize_and_map_with_llm(md_content, layouts, image_list, api_key):
     prompt = f"""
     You are a professional presentation designer. Convert the following report into a slide deck.
     
-    AVAILABLE TEMPLATE LAYOUTS:
+    AVAILABLE TEMPLATE LAYOUTS (with text capacity limits):
     {layout_context}
     
     AVAILABLE IMAGES:
     {", ".join(image_list) if image_list else "No images available"}
     
-    CRITICAL INSTRUCTIONS FOR TEXT FITTING:
-    1. Create a title slide first (usually layout 0 or one named 'Title Slide')
-    2. **MAXIMUM 4 bullets per slide** - This is a hard limit for readability
-    3. **Each bullet MUST be under 50 characters** - Longer text won't fit properly
-    4. **If a topic needs more than 4 bullets, split into multiple slides** with titles like:
-       - "Topic Name (1/2)" and "Topic Name (2/2)" 
-       - "Topic Name - Part 1" and "Topic Name - Part 2"
-    5. For slides with images, prefer layouts marked [SUPPORTS IMAGES]
-    6. For text-heavy slides, use layouts with [HAS TEXT BODY]
-    7. Better to have more slides with less content than fewer slides that are overcrowded
+    CRITICAL INSTRUCTIONS:
+    1. **RESPECT LAYOUT CAPACITY**: Each layout shows its max bullets and chars per bullet
+    2. **USE THE FULL CAPACITY** - Don't be overly conservative, utilize the available space
+    3. If content naturally fits in fewer bullets, that's fine, but don't artificially split when you have room
+    4. Create a title slide first
+    5. For each slide, choose a layout with adequate capacity for your content
+    6. Only split into multiple slides if content truly exceeds the layout's stated capacity
+    7. For images, prefer layouts marked [IMAGES]
+    8. Aim for informative, substantive content that uses available space effectively
     
-    RETURN FORMAT:
-    Return a JSON object with key 'slides', where each slide has:
-    - "title": slide title (keep under 45 characters)
-    - "bullets": list of bullet points (MAX 4 items, each under 50 chars)
-    - "image_path": path from available images or null
-    - "layout_index": best matching layout index
-    - "notes": any additional context (optional)
+    RETURN FORMAT (JSON only):
+    {{
+      "slides": [
+        {{
+          "title": "slide title (under 45 chars)",
+          "bullets": ["bullet 1", "bullet 2", ...],
+          "image_path": "path/to/image.png or null",
+          "layout_index": 0,
+          "notes": "optional context"
+        }}
+      ]
+    }}
     
     REPORT:
     {md_content}
@@ -115,7 +152,7 @@ def summarize_and_map_with_llm(md_content, layouts, image_list, api_key):
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are a PowerPoint automation expert. Output valid JSON only. ALWAYS split content into multiple slides if needed. Never exceed 4 bullets per slide or 50 characters per bullet."},
+            {"role": "system", "content": "You are a PowerPoint expert. Output ONLY valid JSON. Respect layout capacity limits but use the available space effectively. Create comprehensive, informative slides."},
             {"role": "user", "content": prompt}
         ],
         response_format={"type": "json_object"}
@@ -126,65 +163,76 @@ def fit_image_to_placeholder(placeholder, image_path):
     """Inserts image while maintaining aspect ratio within placeholder bounds."""
     from PIL import Image
     
-    # Get placeholder dimensions
     ph_width = placeholder.width
     ph_height = placeholder.height
     ph_left = placeholder.left
     ph_top = placeholder.top
     
-    # Get image dimensions
     with Image.open(image_path) as img:
         img_width, img_height = img.size
         img_ratio = img_width / img_height
         ph_ratio = ph_width / ph_height
         
-        # Calculate scaled dimensions to fit within placeholder
         if img_ratio > ph_ratio:
-            # Image is wider - fit to width
             new_width = ph_width
             new_height = int(ph_width / img_ratio)
         else:
-            # Image is taller - fit to height
             new_height = ph_height
             new_width = int(ph_height * img_ratio)
         
-        # Center the image in the placeholder area
         left = ph_left + (ph_width - new_width) // 2
         top = ph_top + (ph_height - new_height) // 2
         
         return left, top, new_width, new_height
 
-def split_slide_if_needed(slide_info, max_bullets=4, max_chars=50):
-    """Splits a slide into multiple slides if it has too many bullets or text is too long."""
+def split_slide_if_needed(slide_info, layouts):
+    """Splits a slide into multiple slides based on the chosen layout's actual capacity."""
     bullets = slide_info.get('bullets', [])
+    layout_idx = slide_info.get('layout_index', 1)
     
-    # Check if split is needed
-    needs_split = len(bullets) > max_bullets
+    if layout_idx < len(layouts) and layouts[layout_idx].get('text_capacity'):
+        capacity = layouts[layout_idx]['text_capacity']
+        max_bullets = capacity['max_bullets']
+        max_chars = capacity['max_chars_per_bullet']
+    else:
+        max_bullets = 6
+        max_chars = 80
     
-    # Also check if any bullet is too long
-    if not needs_split:
-        for bullet in bullets:
-            if len(str(bullet)) > max_chars:
-                needs_split = True
-                break
+    # Only split if we significantly exceed capacity (add 20% buffer)
+    needs_split = len(bullets) > int(max_bullets * 1.2)
+    
+    # Check for excessively long bullets (30% over limit)
+    for bullet in bullets:
+        if len(str(bullet)) > int(max_chars * 1.3):
+            needs_split = True
+            break
     
     if not needs_split:
         return [slide_info]
     
-    # Split into multiple slides
     result_slides = []
     chunks = []
     current_chunk = []
-    current_length = 0
     
     for bullet in bullets:
         bullet_text = str(bullet)
-        # If single bullet is too long, try to keep it alone on a slide
-        if len(bullet_text) > max_chars:
-            if current_chunk:
-                chunks.append(current_chunk)
-                current_chunk = []
-            chunks.append([bullet_text])
+        
+        if len(bullet_text) > int(max_chars * 1.3):
+            if '. ' in bullet_text:
+                sentences = bullet_text.split('. ')
+                for sent in sentences:
+                    if not sent.endswith('.'):
+                        sent += '.'
+                    if len(current_chunk) >= max_bullets:
+                        chunks.append(current_chunk)
+                        current_chunk = [sent.strip()]
+                    else:
+                        current_chunk.append(sent.strip())
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = []
+                chunks.append([bullet_text])
         else:
             if len(current_chunk) >= max_bullets:
                 chunks.append(current_chunk)
@@ -195,33 +243,32 @@ def split_slide_if_needed(slide_info, max_bullets=4, max_chars=50):
     if current_chunk:
         chunks.append(current_chunk)
     
-    # Create slides from chunks
     base_title = slide_info.get('title', 'Slide')
     total_parts = len(chunks)
     
     for i, chunk in enumerate(chunks):
         new_slide = slide_info.copy()
         if total_parts > 1:
-            new_slide['title'] = f"{base_title} ({i+1}/{total_parts})"
+            clean_title = re.sub(r'\s*\(\d+/\d+\)\s*$', '', base_title)
+            clean_title = re.sub(r'\s*-\s*Part\s+\d+\s*$', '', clean_title, flags=re.IGNORECASE)
+            new_slide['title'] = f"{clean_title} ({i+1}/{total_parts})"
         new_slide['bullets'] = chunk
-        # Only first slide gets the image
         if i > 0:
             new_slide['image_path'] = None
         result_slides.append(new_slide)
     
     return result_slides
 
-def create_presentation(slides_data, template_path, output_path, md_dir):
+def create_presentation(slides_data, template_path, output_path, md_dir, layouts):
     """Constructs the presentation with improved text fitting and image placement."""
     prs = Presentation(template_path)
     
     num_original_slides = len(prs.slides)
     print(f"Template contains {num_original_slides} sample slides. They will be removed after generation.")
 
-    # Pre-process slides to split any that are too large
     processed_slides = []
     for slide_info in slides_data:
-        split_slides = split_slide_if_needed(slide_info)
+        split_slides = split_slide_if_needed(slide_info, layouts)
         processed_slides.extend(split_slides)
     
     if len(processed_slides) > len(slides_data):
@@ -236,13 +283,11 @@ def create_presentation(slides_data, template_path, output_path, md_dir):
         slide = prs.slides.add_slide(layout)
         print(f"Creating Slide {i+1}: {slide_info.get('title', 'Untitled')}")
 
-        # Set title with auto-fitting
         if slide.shapes.title:
             slide.shapes.title.text = slide_info.get('title', 'Slide')
             if slide.shapes.title.has_text_frame:
                 auto_fit_text(slide.shapes.title.text_frame, max_font_size=32, min_font_size=20)
 
-        # Find and populate text placeholder
         text_placeholder = next(
             (s for s in slide.placeholders if s.placeholder_format.type in 
              [PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.SUBTITLE, PP_PLACEHOLDER.OBJECT]), 
@@ -259,30 +304,24 @@ def create_presentation(slides_data, template_path, output_path, md_dir):
                 p.text = str(bullet_text)
                 p.level = 0
             
-            # Auto-fit text content
             auto_fit_text(tf, max_font_size=18, min_font_size=10)
 
-        # Handle image placement
         img_rel = slide_info.get('image_path')
         if img_rel:
             full_img_path = os.path.normpath(os.path.join(md_dir, img_rel))
             if os.path.exists(full_img_path):
                 try:
-                    # Try to find picture placeholder first
                     pic_placeholder = next(
                         (s for s in slide.placeholders if s.placeholder_format.type == PP_PLACEHOLDER.PICTURE), 
                         None
                     )
                     
                     if pic_placeholder:
-                        # Use placeholder with aspect ratio fitting
                         left, top, width, height = fit_image_to_placeholder(pic_placeholder, full_img_path)
-                        # Remove placeholder and add picture in its place
                         sp = pic_placeholder._element
                         sp.getparent().remove(sp)
                         slide.shapes.add_picture(full_img_path, left, top, width=width, height=height)
                     else:
-                        # No placeholder - add to default position with reasonable size
                         slide.shapes.add_picture(
                             full_img_path, 
                             Inches(6), 
@@ -292,7 +331,6 @@ def create_presentation(slides_data, template_path, output_path, md_dir):
                 except Exception as e:
                     print(f"Warning: Could not insert image {img_rel}: {e}")
 
-    # Remove original template slides
     print(f"Cleaning up {num_original_slides} sample slides...")
     for _ in range(num_original_slides):
         delete_slide(prs, 0)
@@ -318,7 +356,6 @@ def check_output_writable(output_path):
     """Check if output file can be written (not open in another program)."""
     if os.path.exists(output_path):
         try:
-            # Try to open file in append mode to check if it's locked
             with open(output_path, 'a'):
                 pass
             return True
@@ -350,7 +387,6 @@ def main():
         base, ext = os.path.splitext(args.pptx)
         output_path = f"{base}_output{ext}"
     
-    # Check if output file is writable before doing all the work
     if not check_output_writable(output_path):
         print(f"\n❌ ERROR: Cannot write to '{output_path}'")
         print("The file may be open in PowerPoint or another program.")
@@ -367,7 +403,7 @@ def main():
     slides_json = summarize_and_map_with_llm(content, layouts, images, api_key)
     
     print(f"Creating presentation with {len(slides_json)} slides...")
-    create_presentation(slides_json, args.pptx, output_path, md_dir)
+    create_presentation(slides_json, args.pptx, output_path, md_dir, layouts)
 
 if __name__ == "__main__":
     main()
