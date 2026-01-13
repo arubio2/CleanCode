@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-IAthon – Iteration 6.6 (Token Tracking Version - Fixed)
-New: Comprehensive token usage logging and cost estimation.
+IAthon – Iteration 13 (All Fixes Applied)
+- Live pricing fetch from OpenAI with fallbacks
+- Prevents file reading errors
+- Generates comprehensive Markdown reports
+- Creates multiple diverse visualizations
+- Performs statistical tests
+- Always shows cost summary
 """
 
 import argparse
@@ -11,9 +16,11 @@ import subprocess
 import re
 import time
 import warnings
+import json
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Optional
+from datetime import datetime
 
 warnings.filterwarnings("ignore")
 
@@ -32,7 +39,16 @@ import plotly.graph_objects as go
 
 from openai import OpenAI
 
-# Try to import python-pptx for template creation
+# For web scraping (optional - will fallback if not available)
+try:
+    import requests
+    from bs4 import BeautifulSoup
+    WEB_SCRAPING_AVAILABLE = True
+except ImportError:
+    WEB_SCRAPING_AVAILABLE = False
+    print("⚠️  requests/beautifulsoup4 not available. Install for live pricing: pip install requests beautifulsoup4")
+
+# Try to import python-pptx
 try:
     from pptx import Presentation
     from pptx.util import Inches, Pt
@@ -43,31 +59,8 @@ except ImportError:
     PPTX_AVAILABLE = False
 
 # ======================================================
-# Token Usage Tracker
-# ======================================================
-@dataclass
-class TokenUsage:
-    """Track token usage per model"""
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-    
-    def add(self, prompt: int, completion: int):
-        self.prompt_tokens += prompt
-        self.completion_tokens += completion
-        self.total_tokens += (prompt + completion)
-
-import json
-import re
-import requests
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Optional
-from dataclasses import dataclass, field
-from bs4 import BeautifulSoup
-
-# ======================================================
 # FALLBACK PRICING (if web fetch fails)
+# Updated January 2025
 # ======================================================
 FALLBACK_PRICING = {
     "gpt-4o": {"input": 2.50, "output": 10.00},
@@ -82,6 +75,9 @@ FALLBACK_PRICING = {
     "dall-e-2": {"1024": 0.020, "512": 0.018, "256": 0.016},
 }
 
+# ======================================================
+# Token Usage Tracker with Live Pricing
+# ======================================================
 @dataclass
 class TokenUsage:
     """Track token usage per model"""
@@ -96,156 +92,126 @@ class TokenUsage:
 
 @dataclass
 class UsageTracker:
-    """
-    Central tracker for all API usage with live pricing fetch
-    """
+    """Central tracker with live pricing fetch"""
     models: Dict[str, TokenUsage] = field(default_factory=dict)
     pricing_cache: Dict[str, Dict[str, float]] = field(default_factory=dict)
     pricing_source: str = "unknown"
     cache_file: Path = field(default_factory=lambda: Path.home() / ".cache" / "iathlon" / "openai_pricing.json")
     
     def __post_init__(self):
-        # Ensure cache directory exists
         self.cache_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Try to fetch live pricing on initialization
         self.fetch_pricing()
     
     def _fetch_live_pricing_from_web(self) -> Optional[Dict]:
-        """
-        Attempt to fetch pricing from OpenAI's website
-        Returns dict of pricing or None if failed
-        """
-        print("🌐 Attempting to fetch live pricing from OpenAI...")
+        """Attempt to fetch pricing from OpenAI's website"""
+        if not WEB_SCRAPING_AVAILABLE:
+            return None
         
-        urls_to_try = [
-            "https://openai.com/api/pricing/",
-            "https://platform.openai.com/docs/pricing",
-            "https://openai.com/pricing",
-        ]
+        print("🌐 Fetching live pricing from OpenAI...")
         
-        for url in urls_to_try:
-            try:
-                response = requests.get(
-                    url,
-                    timeout=10,
-                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                )
+        try:
+            response = requests.get(
+                "https://openai.com/api/pricing/",
+                timeout=15,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                }
+            )
+            
+            if response.status_code == 200:
+                text = response.text
+                extracted = {}
                 
-                if response.status_code == 200:
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    text = soup.get_text()
-                    
-                    # Extract pricing using regex patterns
-                    extracted = {}
-                    
-                    # Pattern for model pricing: model name followed by prices
-                    patterns = [
-                        r'(gpt-[\w.-]+).*?\$\s*([\d.]+)\s*(?:/|per)\s*(?:1M|million).*?input.*?\$\s*([\d.]+)\s*(?:/|per)\s*(?:1M|million).*?output',
-                        r'(o\d+(?:-[\w]+)?).*?\$\s*([\d.]+)\s*(?:/|per)\s*(?:1M|million).*?input.*?\$\s*([\d.]+)\s*(?:/|per)\s*(?:1M|million).*?output',
-                    ]
-                    
-                    for pattern in patterns:
-                        for match in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
-                            model = match.group(1).strip()
+                # Try to find JSON pricing data
+                json_patterns = [r'"pricing":\s*({[^}]+})', r'pricing:\s*({[^}]+})']
+                for pattern in json_patterns:
+                    for match in re.finditer(pattern, text):
+                        try:
+                            pricing_json = json.loads(match.group(1))
+                            if isinstance(pricing_json, dict):
+                                extracted.update(pricing_json)
+                        except:
+                            continue
+                
+                # Fallback: regex patterns
+                price_patterns = [
+                    r'(gpt-[\w.-]+|o\d+(?:-[\w]+)?)\s*[^\d]*\$\s*([\d.]+)\s*(?:/|per)\s*(?:1M|million)[^\$]*\$\s*([\d.]+)\s*(?:/|per)\s*(?:1M|million)',
+                ]
+                
+                for pattern in price_patterns:
+                    for match in re.finditer(pattern, text, re.IGNORECASE):
+                        try:
+                            model = match.group(1).strip().lower()
                             input_price = float(match.group(2))
                             output_price = float(match.group(3))
                             extracted[model] = {"input": input_price, "output": output_price}
-                    
-                    if extracted:
-                        print(f"✅ Successfully fetched pricing for {len(extracted)} models from {url}")
-                        
-                        # Save to cache
-                        try:
-                            cache_data = {
-                                'timestamp': datetime.now().isoformat(),
-                                'source': url,
-                                'pricing': extracted
-                            }
-                            with open(self.cache_file, 'w') as f:
-                                json.dump(cache_data, f, indent=2)
-                            print(f"💾 Saved live pricing to cache: {self.cache_file}")
-                        except Exception as e:
-                            print(f"⚠️  Failed to save cache: {e}")
-                        
-                        return extracted
-            
-            except Exception as e:
-                continue
+                        except:
+                            continue
+                
+                if extracted:
+                    print(f"✅ Fetched pricing for {len(extracted)} models")
+                    cache_data = {
+                        'timestamp': datetime.now().isoformat(),
+                        'source': 'https://openai.com/api/pricing/',
+                        'pricing': extracted
+                    }
+                    with open(self.cache_file, 'w') as f:
+                        json.dump(cache_data, f, indent=2)
+                    return extracted
+                else:
+                    print(f"⚠️  Page loaded but no pricing extracted (JavaScript-rendered content)")
+        except Exception as e:
+            print(f"⚠️  Web fetch failed: {str(e)[:80]}")
         
-        print("⚠️  Failed to fetch live pricing from all URLs")
         return None
     
     def _load_from_cache(self) -> Optional[Dict]:
-        """Load pricing from cache file"""
+        """Load from cache"""
         try:
             if self.cache_file.exists():
                 with open(self.cache_file, 'r') as f:
                     cache_data = json.load(f)
-                
                 timestamp = cache_data.get('timestamp', 'unknown')
                 pricing = cache_data.get('pricing', {})
-                
                 if pricing:
                     print(f"💾 Loaded cached pricing from {timestamp}")
                     return pricing
         except Exception as e:
-            print(f"⚠️  Failed to load cache: {e}")
-        
+            print(f"⚠️  Cache load failed: {e}")
         return None
     
     def fetch_pricing(self):
-        """
-        Fetch current pricing with fallback chain:
-        1. Try live web fetch
-        2. Try cached pricing
-        3. Use hardcoded fallback
-        """
-        # Try live fetch first
+        """Fetch with fallback chain"""
         live_pricing = self._fetch_live_pricing_from_web()
-        
         if live_pricing:
             self.pricing_cache = live_pricing
             self.pricing_source = "live"
-            return self.pricing_cache
+            return
         
-        # Try cache
         cached_pricing = self._load_from_cache()
         if cached_pricing:
             self.pricing_cache = cached_pricing
             self.pricing_source = "cache"
-            return self.pricing_cache
+            return
         
-        # Use fallback
-        print("📋 Using hardcoded fallback pricing (January 2025)")
+        print("📋 Using fallback pricing (January 2025)")
         self.pricing_cache = FALLBACK_PRICING.copy()
         self.pricing_source = "fallback"
-        
-        return self.pricing_cache
     
     def _get_model_pricing(self, model_name: str) -> Dict[str, float]:
-        """Get pricing for a specific model with intelligent matching"""
-        # Try exact match
+        model_lower = model_name.lower()
         if model_name in self.pricing_cache:
             return self.pricing_cache[model_name]
         
-        # Try pattern matching (e.g., gpt-4o-2024-11-20 matches gpt-4o)
-        for known_model, pricing in self.pricing_cache.items():
-            if model_name.startswith(known_model):
-                return pricing
+        # Priority matching for known tiers
+        if "o1" in model_lower or "gpt-4" in model_lower and "mini" not in model_lower:
+            return FALLBACK_PRICING.get("gpt-4o", {"input": 2.50, "output": 10.00})
+        if "mini" in model_lower or "gpt-3.5" in model_lower:
+            return FALLBACK_PRICING.get("gpt-4o-mini", {"input": 0.15, "output": 0.60})
+            
+        return {"input": 2.50, "output": 10.00} # Default to standard 4o rates
         
-        # Infer from model name
-        model_lower = model_name.lower()
-        if 'gpt-5' in model_lower or 'o4' in model_lower:
-            return {"input": 15.00, "output": 60.00}
-        elif 'gpt-4' in model_lower or 'o1' in model_lower:
-            return {"input": 30.00, "output": 60.00}
-        elif 'mini' in model_lower or 'gpt-3.5' in model_lower:
-            return {"input": 0.50, "output": 1.50}
-        else:
-            print(f"⚠️  Unknown model '{model_name}', using conservative estimate")
-            return {"input": 30.00, "output": 60.00}
-    
     def record(self, model: str, usage):
         """Record usage from OpenAI response"""
         if model not in self.models:
@@ -254,7 +220,6 @@ class UsageTracker:
         prompt = 0
         completion = 0
         
-        # Try different attribute names
         for prompt_attr in ['prompt_tokens', 'input_tokens', 'total_input_tokens']:
             if hasattr(usage, prompt_attr):
                 prompt = getattr(usage, prompt_attr)
@@ -265,7 +230,6 @@ class UsageTracker:
                 completion = getattr(usage, completion_attr)
                 break
         
-        # Fallback to dict
         if prompt == 0 and completion == 0:
             try:
                 if hasattr(usage, '__dict__'):
@@ -274,75 +238,62 @@ class UsageTracker:
                     usage_dict = usage.model_dump()
                 else:
                     usage_dict = dict(usage)
-                
                 prompt = usage_dict.get('prompt_tokens', 0) or usage_dict.get('input_tokens', 0)
                 completion = usage_dict.get('completion_tokens', 0) or usage_dict.get('output_tokens', 0)
             except:
-                print(f"⚠️  Warning: Could not extract token usage")
+                pass
         
         self.models[model].add(prompt, completion)
     
     def record_image(self, model: str, num_images: int = 1, size: str = "1024x1024", quality: str = "standard"):
-        """Record image generation usage"""
+        """Record image generation"""
         if model not in self.models:
             self.models[model] = TokenUsage()
-        
         self.models[model].add(num_images, 0)
-        
         if not hasattr(self.models[model], 'image_specs'):
             self.models[model].image_specs = []
         self.models[model].image_specs.append({'size': size, 'quality': quality})
     
     def print_summary(self):
-        """Print detailed usage summary with cost estimates"""
+        """Print cost summary"""
         print("\n" + "="*80)
         print("💰 TOKEN USAGE & COST SUMMARY")
         print("="*80)
         
-        # Show pricing source
         source_indicators = {
             'live': '✅ Live from OpenAI',
-            'cache': '💾 Cached from previous fetch',
-            'fallback': '📋 Hardcoded fallback (Jan 2025)'
+            'cache': '💾 Cached pricing',
+            'fallback': '📋 Fallback pricing'
         }
-        print(f"📊 Pricing Source: {source_indicators.get(self.pricing_source, 'Unknown')}")
-        print(f"📅 Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"📊 Pricing: {source_indicators.get(self.pricing_source, 'Unknown')}")
+        print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("="*80)
         
         total_cost = 0.0
         
         for model, usage in self.models.items():
-            print(f"\n🤖 Model: {model}")
+            print(f"\n🤖 {model}")
             
-            # Check if image model
             if 'dall-e' in model.lower():
                 num_images = usage.prompt_tokens
-                print(f"   Images generated:  {num_images}")
-                
+                print(f"   Images: {num_images}")
                 if hasattr(usage, 'image_specs'):
                     model_cost = 0
                     pricing = self._get_model_pricing(model)
-                    
                     for spec in usage.image_specs:
-                        size = spec['size']
-                        quality = spec['quality']
-                        
+                        size, quality = spec['size'], spec['quality']
                         if 'dall-e-3' in model.lower():
                             key = f"{'hd' if quality == 'hd' else 'standard'}_{size.split('x')[0]}"
-                            cost_per_image = pricing.get(key, 0.040)
+                            cost = pricing.get(key, 0.040)
                         else:
-                            cost_per_image = pricing.get(size.split('x')[0], 0.020)
-                        
-                        model_cost += cost_per_image
-                        print(f"   Size: {size}, Quality: {quality}, Cost: ${cost_per_image:.4f}")
-                    
+                            cost = pricing.get(size.split('x')[0], 0.020)
+                        model_cost += cost
                     total_cost += model_cost
-                    print(f"   Total cost:        ${model_cost:.6f}")
+                    print(f"   Cost: ${model_cost:.6f}")
             else:
-                # Regular token-based model
-                print(f"   Input tokens:      {usage.prompt_tokens:>12,}")
-                print(f"   Output tokens:     {usage.completion_tokens:>12,}")
-                print(f"   Total tokens:      {usage.total_tokens:>12,}")
+                print(f"   Input:  {usage.prompt_tokens:>10,} tokens")
+                print(f"   Output: {usage.completion_tokens:>10,} tokens")
+                print(f"   Total:  {usage.total_tokens:>10,} tokens")
                 
                 pricing = self._get_model_pricing(model)
                 input_cost = (usage.prompt_tokens / 1_000_000) * pricing["input"]
@@ -350,78 +301,36 @@ class UsageTracker:
                 model_cost = input_cost + output_cost
                 total_cost += model_cost
                 
-                print(f"   ─────────────────────────────────")
-                print(f"   Input cost:        ${input_cost:>12.6f}")
-                print(f"   Output cost:       ${output_cost:>12.6f}")
-                print(f"   Model total:       ${model_cost:>12.6f}")
-                print(f"   Rate: ${pricing['input']:.2f}/${pricing['output']:.2f} per 1M tokens")
+                print(f"   Rate: ${pricing['input']:.3f}/${pricing['output']:.3f} per 1M")
+                print(f"   Cost: ${model_cost:.6f}")
         
         print(f"\n{'='*80}")
-        print(f"💵 TOTAL ESTIMATED COST: ${total_cost:.6f}")
+        print(f"💵 TOTAL COST: ${total_cost:.6f}")
         print("="*80)
         
         return total_cost
     
     def save_log(self, output_dir: Path):
-        """Save detailed log to file"""
+        """Save log file"""
         log_path = output_dir / "token_usage.log"
-        
         with open(log_path, 'w') as f:
-            f.write("="*80 + "\n")
-            f.write("TOKEN USAGE & COST LOG\n")
-            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Pricing Source: {self.pricing_source}\n")
-            f.write("="*80 + "\n\n")
+            f.write(f"TOKEN USAGE LOG\n")
+            f.write(f"Generated: {datetime.now()}\n")
+            f.write(f"Pricing: {self.pricing_source}\n\n")
             
-            total_cost = 0.0
-            
+            total = 0.0
             for model, usage in self.models.items():
-                f.write(f"Model: {model}\n")
-                
-                if 'dall-e' in model.lower():
-                    num_images = usage.prompt_tokens
-                    f.write(f"  Images: {num_images}\n")
-                    
-                    if hasattr(usage, 'image_specs'):
-                        model_cost = 0
-                        pricing = self._get_model_pricing(model)
-                        
-                        for spec in usage.image_specs:
-                            size = spec['size']
-                            quality = spec['quality']
-                            
-                            if 'dall-e-3' in model.lower():
-                                key = f"{'hd' if quality == 'hd' else 'standard'}_{size.split('x')[0]}"
-                                cost = pricing.get(key, 0.040)
-                            else:
-                                cost = pricing.get(size.split('x')[0], 0.020)
-                            
-                            model_cost += cost
-                            f.write(f"  {size} {quality}: ${cost:.4f}\n")
-                        
-                        total_cost += model_cost
-                        f.write(f"  Total: ${model_cost:.6f}\n")
-                else:
-                    f.write(f"  Input tokens:  {usage.prompt_tokens:,}\n")
-                    f.write(f"  Output tokens: {usage.completion_tokens:,}\n")
-                    f.write(f"  Total tokens:  {usage.total_tokens:,}\n")
-                    
+                f.write(f"{model}:\n")
+                if 'dall-e' not in model.lower():
                     pricing = self._get_model_pricing(model)
-                    input_cost = (usage.prompt_tokens / 1_000_000) * pricing["input"]
-                    output_cost = (usage.completion_tokens / 1_000_000) * pricing["output"]
-                    model_cost = input_cost + output_cost
-                    total_cost += model_cost
-                    
-                    f.write(f"  Input cost:  ${input_cost:.6f}\n")
-                    f.write(f"  Output cost: ${output_cost:.6f}\n")
-                    f.write(f"  Total cost:  ${model_cost:.6f}\n")
-                
+                    cost = (usage.prompt_tokens / 1_000_000) * pricing["input"] + \
+                           (usage.completion_tokens / 1_000_000) * pricing["output"]
+                    f.write(f"  Tokens: {usage.total_tokens:,}\n")
+                    f.write(f"  Cost: ${cost:.6f}\n")
+                    total += cost
                 f.write("\n")
-            
-            f.write("="*80 + "\n")
-            f.write(f"TOTAL COST: ${total_cost:.6f}\n")
-        
-        print(f"📄 Token usage log saved to: {log_path}")
+            f.write(f"TOTAL: ${total:.6f}\n")
+        print(f"📄 Log saved: {log_path}")
 
 # ======================================================
 # Utilities
@@ -430,7 +339,7 @@ def get_api_key(cli_key=None):
     return cli_key or os.getenv("OPENAI_API_KEY")
 
 def robust_rmtree(path: Path):
-    """Attempt to delete a directory, handling Windows/OneDrive locks."""
+    """Delete directory with retry"""
     if not path.exists():
         return
     for _ in range(3):
@@ -446,71 +355,12 @@ def robust_rmtree(path: Path):
         except:
             pass
 
-def create_styled_reference(output_dir: Path, figures_dir: Path):
-    """Create a styled PowerPoint reference template"""
-    if not PPTX_AVAILABLE:
-        print("⚠️  python-pptx not available. Install with: pip install python-pptx")
-        print("   Using default PowerPoint styling instead.")
-        return None
-    
-    print("🎨 Creating styled presentation template...")
-    
-    # Start with a blank presentation
-    prs = Presentation()
-    prs.slide_width = Inches(10)
-    prs.slide_height = Inches(7.5)
-    
-    # Define color scheme (professional blue theme)
-    DARK_BLUE = RGBColor(31, 78, 121)
-    ACCENT_BLUE = RGBColor(91, 155, 213)
-    GRAY = RGBColor(89, 89, 89)
-    
-    # Add one sample slide of each type Pandoc expects
-    # Slide 1: Title Slide
-    title_slide_layout = prs.slide_layouts[0]
-    slide1 = prs.slides.add_slide(title_slide_layout)
-    
-    # Customize title slide text
-    title = slide1.shapes.title
-    if title:
-        title.text = "Sample Title"
-        title.text_frame.paragraphs[0].font.size = Pt(44)
-        title.text_frame.paragraphs[0].font.color.rgb = DARK_BLUE
-        title.text_frame.paragraphs[0].font.bold = True
-    
-    # Slide 2: Title and Content
-    content_slide_layout = prs.slide_layouts[1]
-    slide2 = prs.slides.add_slide(content_slide_layout)
-    
-    # Customize content slide
-    title2 = slide2.shapes.title
-    if title2:
-        title2.text = "Sample Slide"
-        title2.text_frame.paragraphs[0].font.size = Pt(32)
-        title2.text_frame.paragraphs[0].font.color.rgb = DARK_BLUE
-        title2.text_frame.paragraphs[0].font.bold = True
-    
-    # Find and style the content placeholder
-    for shape in slide2.placeholders:
-        if shape.placeholder_format.type == 2:  # Body placeholder
-            tf = shape.text_frame
-            tf.text = "Sample bullet point"
-            for paragraph in tf.paragraphs:
-                paragraph.font.size = Pt(18)
-                paragraph.font.color.rgb = GRAY
-    
-    # Save reference template
-    ref_path = output_dir / "reference_template.pptx"
-    prs.save(str(ref_path))
-    print(f"✅ Template created: {ref_path}")
-    return ref_path
-
 # ======================================================
-# 1. DATA LOADING & CLEANING
+# Data Loading
 # ======================================================
 def load_and_clean(path: Path):
     if path.suffix.lower() == ".csv":
-        df = pd.read_csv(path)
+        df = pd.read_csv(path, on_bad_lines='skip')
     else:
         df = pd.read_excel(path)
 
@@ -523,9 +373,8 @@ def load_and_clean(path: Path):
     return df, num_features, cat_features
 
 # ======================================================
-# 2. SAFE EXECUTION ENVIRONMENT (FIXED)
+# Safe Execution Environment
 # ======================================================
-# Also update CodexGenerator.generate() prompt below
 class SafeRunner:
     def __init__(self, df, num_features, cat_features, output_dir: Path, verbose=False):
         self.df = df
@@ -536,12 +385,14 @@ class SafeRunner:
         self.figures_dir = self.output_dir / "figures"
         
         if self.figures_dir.exists():
-            if self.verbose: print(f"🧹 Cleaning old figures (Robust mode)...")
+            if self.verbose: print(f"🧹 Cleaning old figures...")
             robust_rmtree(self.figures_dir)
         
         self.figures_dir.mkdir(parents=True, exist_ok=True)
     
     def run(self, code):
+        assert "exec(" not in code.lower(), "Generated code must not call exec()"
+
         if "```" in code:
             match = re.search(r"```(?:python)?\n?(.*?)\n?```", code, re.DOTALL)
             if match:
@@ -549,331 +400,213 @@ class SafeRunner:
             else:
                 code = "\n".join([line for line in code.split("\n") if "```" not in line])
 
-        # SECURITY CHECK: Block file reading operations - data is already in memory
-        forbidden_patterns = [
-            (r'pd\.read_csv\s*\(', "pd.read_csv() - data is already loaded in 'df' variable"),
-            (r'pd\.read_excel\s*\(', "pd.read_excel() - data is already loaded in 'df' variable"),
-            (r'pd\.read_json\s*\(', "pd.read_json() - data is already loaded in 'df' variable"),
-            (r'pd\.read_table\s*\(', "pd.read_table() - data is already loaded in 'df' variable"),
-            (r'pd\.read_sql\s*\(', "pd.read_sql() - data is already loaded in 'df' variable"),
+        
+        # Block file reading
+        forbidden = [
+            (r'pd\.read_csv\s*\(', "pd.read_csv()"),
+            (r'pd\.read_excel\s*\(', "pd.read_excel()"),
+            (r'pd\.read_json\s*\(', "pd.read_json()"),
         ]
         
-        for pattern, description in forbidden_patterns:
+        for pattern, func in forbidden:
             if re.search(pattern, code, re.IGNORECASE):
-                raise RuntimeError(
-                    f"❌ Code attempted to use {description}. "
-                    f"The DataFrame is already available as 'df'. "
-                    f"Please use the existing 'df' variable instead of reading files."
-                )
+                raise RuntimeError(f"❌ Attempted {func} - use existing 'df' variable instead")
+
+        df_copy = self.df.copy()
 
         globals_safe = {
-            "df": self.df, 
+            "df": df_copy,
             "num_features": self.num_features, 
             "cat_features": self.cat_features, 
-            "plt": plt, 
-            "sns": sns, 
-            "px": px, 
-            "go": go, 
-            "stats": stats, 
-            "np": np, 
-            "pd": pd,
+            "plt": plt, "sns": sns, "px": px, "go": go, 
+            "stats": stats, "np": np, "pd": pd,
             "FIGURES_DIR": str(self.figures_dir),
-            "os": os  # Allow os module for path operations
+            "os": os
         }
         
+        code = re.sub(
+            r"plt\.savefig\(\s*['\"]([^'\"]+\.png)['\"]\s*\)",
+            r"plt.savefig(os.path.join(FIGURES_DIR, '\1'))",
+            code)
+
+
         old_cwd = os.getcwd()
-        os.chdir(self.figures_dir) 
+        os.chdir(self.figures_dir)
+
         try:
             exec(code, globals_safe)
+
+        except NameError as e:
+            raise RuntimeError(
+                f"Generated code referenced an undefined variable: {e}. "
+                "Ensure all intermediate variables (e.g., df_clean) are defined "
+                "before being used."
+            )
+
+        except Exception as e:
+            raise RuntimeError(str(e))
+
         finally:
             os.chdir(old_cwd)
 
+        pngs = list(self.figures_dir.glob("*.png"))
+        if not pngs:
+            raise RuntimeError(
+                "No figures were generated. Ensure plots are saved to FIGURES_DIR.")
+
 
 # ======================================================
-# 3. DECISION MAKER (CHAT MODEL)
+# Decision Maker
 # ======================================================
 class DecisionMaker:
-    def __init__(self, api_key, tracker: UsageTracker, custom_prompt=None, verbose=False):
+    def __init__(self, api_key, tracker, custom_prompt=None, verbose=False):
         self.client = OpenAI(api_key=api_key)
         self.tracker = tracker
         self.custom_prompt = custom_prompt
         self.verbose = verbose
         self.model = "gpt-5-mini"
     
-    def synthesize_report(self, analysis_log, original_prompt, figures_dir, data_preview):
-        if self.verbose: print("✍️ Synthesizing domain-aware report...")
-        
-        figs = sorted(figures_dir.glob("*.png"))
-        fig_list = "\n".join([f"- {f.name}" for f in figs])
-
-        # Build context-aware prompt
-        context_section = ""
-        style_section = "STYLE: High-impact scientific paper."
-        
-        if self.custom_prompt:
-            context_section = f"""
-USER CONTEXT AND REQUIREMENTS:
-{self.custom_prompt}
-
-IMPORTANT: Adapt the report to match the user's specified context, tone, length, and focus areas.
-"""
-            # Extract style hints if provided
-            if any(word in self.custom_prompt.lower() for word in ['concise', 'brief', 'short', 'executive']):
-                style_section = "STYLE: Concise executive summary format (3-5 pages max)."
-            elif any(word in self.custom_prompt.lower() for word in ['detailed', 'comprehensive', 'thorough', 'in-depth']):
-                style_section = "STYLE: Comprehensive technical report with detailed analysis."
-            elif any(word in self.custom_prompt.lower() for word in ['casual', 'informal', 'accessible']):
-                style_section = "STYLE: Accessible, conversational tone for general audience."
-
-        synthesis_prompt = f"""
-        You are a world-class Data Scientist and Technical Writer.
-        
-        {context_section}
-        
-        DATA PREVIEW (Use this to discover the context):
-        {data_preview}
-
-        ANALYSIS HISTORY:
-        {analysis_log}
-
-        AVAILABLE FIGURES:
-        {fig_list}
-
-        YOUR TASK:
-        1. CONTEXT IDENTIFICATION: Based on the preview and user requirements, understand the data domain.
-        2. DOMAIN VOCABULARY: Use correct terminology appropriate to the field.
-        3. REPORT STRUCTURE: Intro, Detailed Results (with images), Statistical Discussion, and Conclusion.
-        4. IMAGE EMBEDDING: Place ![Description](figures/filename.png) immediately after the text that discusses it.
-        5. USER REQUIREMENTS: Follow any specific instructions about length, tone, focus areas, or audience.
-        
-        {style_section}
-        """
-        response = self.client.chat.completions.create(
-            model=self.model, 
-            messages=[{"role": "user", "content": synthesis_prompt}],
-            #temperature=0.7 
-        )
-        
-        # Track usage
-        if hasattr(response, 'usage'):
-            self.tracker.record(self.model, response.usage)
-        
-        return response.choices[0].message.content
-    
-    def synthesize_presentation(self, analysis_log, figures_dir, data_preview):
-        """Generate presentation-optimized content with bullet points"""
-        if self.verbose: print("📊 Creating presentation slides...")
-        
-        figs = sorted(figures_dir.glob("*.png"))
-        fig_list = "\n".join([f"- {f.name}" for f in figs])
-
-        # Adapt presentation to user context
-        context_section = ""
-        if self.custom_prompt:
-            context_section = f"""
-USER CONTEXT:
-{self.custom_prompt}
-
-Adapt the presentation style and content to match the user's requirements.
-"""
-
-        pptx_prompt = f"""
-        You are creating a professional PowerPoint presentation for executives.
-        
-        {context_section}
-        
-        DATA PREVIEW:
-        {data_preview}
-
-        ANALYSIS HISTORY:
-        {analysis_log}
-
-        AVAILABLE FIGURES (CRITICAL - You MUST use these exact filenames):
-        {fig_list}
-
-        YOUR TASK - Create a slide deck in Markdown format:
-        
-        FIRST: Analyze the data context and identify the domain (e.g., sports, finance, healthcare, etc.)
-        
-        STRUCTURE (Use # for slide titles):
-        
-        # [Title Slide - Catchy title based on data context]
-        
-        [Subtitle with context]
-        
-        ---
-        
-        # Executive Summary
-        
-        - 3-4 key bullet points (high-level insights only)
-        - Each bullet should be ONE concise line
-        
-        ---
-        
-        # Data Overview
-        
-        - What this data represents
-        - Key metrics tracked
-        - Sample size and scope
-        
-        ---
-        
-        # Key Finding 1: [Descriptive Title]
-        
-        - 2-3 bullet points summarizing the insight
-        - Keep each bullet to ONE line
-        
-        ![](figures/EXACT_FIGURE_NAME_1.png)
-        
-        ---
-        
-        # Key Finding 2: [Descriptive Title]
-        
-        - 2-3 bullet points
-        
-        ![](figures/EXACT_FIGURE_NAME_2.png)
-        
-        ---
-        
-        [Continue for EACH figure in the list above - create one findings slide per figure]
-        
-        # Statistical Insights
-        
-        - 3-4 bullets highlighting statistical significance
-        - Correlations or patterns discovered
-        
-        ---
-        
-        # Conclusions & Recommendations
-        
-        - 3-4 actionable takeaways
-        - Each as a single, impactful bullet
-        
-        CRITICAL RULES FOR IMAGES:
-        - Use EXACTLY: ![](figures/filename.png) - NO alt text in brackets
-        - Use the EXACT filenames from the list above
-        - Place image AFTER the bullet points on each findings slide
-        - Create ONE slide per figure
-        - Use --- to separate slides
-        
-        OTHER RULES:
-        - Maximum 5 bullets per slide
-        - Each bullet must be ONE line (max 15 words)
-        - Use domain-appropriate terminology
-        - Be specific with numbers when relevant
-        - NO paragraphs, NO long explanations
-        """
-        
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": pptx_prompt}],
-            #temperature=0.6
-        )
-        
-        # Track usage
-        if hasattr(response, 'usage'):
-            self.tracker.record(self.model, response.usage)
-        
-        content = response.choices[0].message.content
-        
-        # Extract domain context for image generation
-        domain_match = re.search(r'#\s*(.+?)(?:\n|$)', content)
-        if domain_match:
-            title = domain_match.group(1).strip()
-            # Generate a short domain description from the title
-            domain_context = f"professional, minimalist illustration representing {title}"
-        else:
-            domain_context = "professional data analysis presentation"
-        
-        return content, domain_context
-    
-    def generate_title_image(self, domain_context: str, output_path: Path):
-        """Generate a title slide image using DALL-E"""
-        if self.verbose: print(f"🎨 Generating title image: {domain_context}")
-        
-        # Enhance with custom context if available
-        if self.custom_prompt:
-            domain_context = f"{domain_context}. Context: {self.custom_prompt[:100]}"
-        
-        # Create a refined prompt for DALL-E
-        image_prompt = f"""
-        Create a professional, modern, minimalist cover image for a business presentation.
-        Theme: {domain_context}
-        Style: Clean, corporate, high-quality photography or digital art
-        Composition: Centered focal point with negative space for text overlay
-        Colors: Professional color palette with blue/gray tones
-        NO text, NO numbers, NO labels in the image
-        """
-        
-        try:
-            response = self.client.images.generate(
-                model="dall-e-3",
-                prompt=image_prompt,
-                size="1792x1024",  # Wide format for presentation
-                quality="standard",
-                n=1
-            )
-            
-            # Track image generation usage
-            self.tracker.record_image("dall-e-3", num_images=1, size="1792x1024", quality="standard")
-            
-            # Download the image
-            import urllib.request
-            image_url = response.data[0].url
-            urllib.request.urlretrieve(image_url, output_path)
-            
-            print(f"✅ Title image saved to: {output_path}")
-            return output_path
-            
-        except Exception as e:
-            print(f"⚠️  Failed to generate title image: {e}")
-            return None
-
     def decide(self, observations: str, step_num: int, max_steps: int, 
-           num_features: list, cat_features: list, data_preview: str) -> str:
+               num_features: list, cat_features: list, data_preview: str) -> str:
         
-        # Adapt analysis approach based on custom prompt
-        context_section = ""
+        context = ""
         if self.custom_prompt:
-            context_section = f"""
-USER PROVIDED CONTEXT:
-{self.custom_prompt}
+            context = f"USER CONTEXT: {self.custom_prompt}\n\n"
+       
 
-Use this information to guide your analysis focus and methodology.
-"""
-        
-        prompt = f"""Analyze the DATA PREVIEW below to identify the domain.
-                
-                {context_section}
-                
-                DATA PREVIEW:
-                {data_preview}
+        prompt = f"""{context}DATA PREVIEW:
+{data_preview}
 
-                STEP: {step_num + 1} of {max_steps}
-                CURRENT OBSERVATIONS: {observations}
+NUMERIC: {num_features}
+CATEGORICAL: {cat_features}
 
-                MISSION: 
-                - Deduce the origin/subject of the data (consider user context if provided).
-                - Propose a specific visualization or statistical test.
-                - If columns represent times (Split/Swim/Bike), suggest converting them to seconds.
-                - Align analysis with user requirements and priorities.
-                
-                DECISION (ONE ACTION):"""
+STEP {step_num + 1}/{max_steps}
+OBSERVATIONS: {observations}
+
+STRATEGY - Create diverse, comprehensive analysis:
+1. Distribution plots (histograms, KDE)
+2. Correlation heatmaps
+3. Scatter plots for relationships
+4. Box plots for group comparisons
+5. Statistical tests (t-tests, ANOVA, chi-square, correlations)
+6. Time series if applicable
+7. Outlier detection
+8. MANDATORY: Kaplan-Meier Survival Analysis and Log-rank tests IF variables like 'death', 'status', or 'time' are detected in the preview.
+9. Log-rank or Cox regression tests to compare survival between groups
+
+GOALS:
+- Generate 8-10 different visualizations
+- Perform 3+ statistical tests  
+- Use varied plot types
+- Focus on most interesting patterns
+
+Choose ONE specific next action. Be concrete about variables.
+If {step_num + 1} >= 15, respond "STOP"."""
         
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
-            #temperature=0.3,
+            # temperature=0.4,
         )
         
-        # Track usage
         if hasattr(response, 'usage'):
             self.tracker.record(self.model, response.usage)
         
         return response.choices[0].message.content.strip()
+    
 
+
+
+    def synthesize_report(self, analysis_log, original_prompt, figures_dir, data_preview):
+        if self.verbose: print("✍️ Synthesizing Final Report...")
+        
+        figs = sorted(figures_dir.glob("*.png"))
+        fig_list = "\n".join([f"figures/{f.name}" for f in figs])
+        context = f"USER CONTEXT: {self.custom_prompt}\n\n" if self.custom_prompt else ""
+
+        prompt = f"""{context}
+You are a professional presentation designer. Create a Markdown document optimized for PPTX.
+
+AVAILABLE FIGURES: {fig_list}
+ANALYSIS RESULTS: {analysis_log}
+
+STRICT SLIDE REQUIREMENTS:
+1. Each H1 (#) or H2 (##) starts a NEW slide.
+2. NO ADVICE OR RECOMMENDATIONS on "what to do next". Stick to the data results.
+3. TABLE SPACING: Include TWO empty lines between a table caption and the table itself.
+4. Use the EXACT filenames from the AVAILABLE FIGURES list.
+5. Create a Title slide, an Executive Summary slide, and several Results slides.
+"""
+        response = self.client.chat.completions.create(
+            model=self.model, 
+            messages=[
+                {"role": "system", "content": "You are a slide generation engine. No meta-talk."},
+                {"role": "user", "content": prompt}
+            ]
+            # temperature=0.2 REMOVED
+        )
+
+
+
+    def synthesize_report(self, analysis_log, original_prompt, figures_dir, data_preview):
+        if self.verbose: print("✍️ Synthesizing Final Report...")
+        
+        # Get actual files on disk to prevent hallucination
+        figs = sorted(figures_dir.glob("*.png"))
+        fig_list = "\n".join([f"figures/{f.name}" for f in figs])
+
+        context = f"USER CONTEXT: {self.custom_prompt}\n\n" if self.custom_prompt else ""
+
+        # Use a VERY strict system-style prompt to remove conversational "filler"
+        prompt = f"""{context}
+You are a technical reporting engine. Write a professional, publication-ready Data Analysis 
+Report in Markdown format.
+
+DATA PREVIEW:
+{data_preview}
+
+ANALYSIS STEPS & RESULTS:
+{analysis_log}
+
+AVAILABLE FIGURES (USE ONLY THESE FILENAMES):
+{fig_list}
+
+STRICT REQUIREMENTS:
+1. DO NOT include conversational filler like "What would you like to do next?" or "I can do these steps".
+2. DO NOT offer to re-run analyses.
+3. INTEGRATE figures: Use ONLY the filenames listed in "AVAILABLE FIGURES".
+        Place each ![Description](figures/filename.png) tag immediately after the paragraph discussing that specific result.
+        Embed figures using: ![Description](figures/filename.png)
+4. Use professional headers (#, ##, ###).
+5. Include a "Statistical Summary" section with exact p-values and means found in the analysis.
+6. END the report with a "Conclusions" section. Do NOT add anything after it.
+7. Every table caption MUST be followed by TWO empty lines to ensure proper rendering.
+
+REPORT STRUCTURE:
+# [Title]
+## Executive Summary
+## Methodology
+## Analysis & Results (Embed figures here)
+## Statistical Tables
+## Conclusions and Recommendations
+"""
+        response = self.client.chat.completions.create(
+            model=self.model, 
+            messages=[
+                {"role": "system", "content": "You are a professional medical and data science reporter. You output only the report text, no meta-talk."},
+                {"role": "user", "content": prompt}
+            ],
+            # temperature=0.2, # Lower temperature for less "creativity" / chatter
+        )
+        
+        if hasattr(response, 'usage'):
+            self.tracker.record(self.model, response.usage)
+        
+        return response.choices[0].message.content
+
+    
 # ======================================================
-# 4. CODE GENERATOR (CODEX)
+# Code Generator
 # ======================================================
 class CodexGenerator:
     def __init__(self, api_key, tracker: UsageTracker, verbose=False):
@@ -882,42 +615,58 @@ class CodexGenerator:
         self.verbose = verbose
         self.model = "gpt-5.1-codex-mini"
 
-    def generate(self, instruction, num_features, cat_features, data_preview) -> str:
-        prompt = f"""
-            You are an expert data scientist.
-            DATA PREVIEW: {data_preview}
-            TASK: {instruction}
-            
-            CRITICAL RULES FOR DATA TYPE HANDLING:
-            - ALWAYS check column dtypes before plotting: df[col].dtype
-            - If a column contains time strings (e.g., HH:MM:SS), use pd.to_timedelta() and .dt.total_seconds()
-            - If a column is 'object' dtype but should be numeric, use pd.to_numeric(df[col], errors='coerce')
-            - Before ANY plotting operation, ensure numeric columns are actually numeric: df[col] = pd.to_numeric(df[col], errors='coerce')
-            - Drop NaN values after conversion: df = df.dropna(subset=[col])
-            - For categorical data in plots, convert to string explicitly: df[col].astype(str)
-            
-            EXAMPLE SAFE PATTERN:
-            ```python
-            # Ensure numeric
-            df['column'] = pd.to_numeric(df['column'], errors='coerce')
-            df = df.dropna(subset=['column'])
-            
-            # Now plot
-            plt.figure(figsize=(10,6))
-            plt.plot(df['column'])
-            plt.savefig(os.path.join(FIGURES_DIR, 'plot.png'))
-            plt.close()
-            ```
-            
-            OTHER RULES:
-            - OUTPUT PYTHON CODE ONLY. NO Markdown.
-            - ALWAYS save to FIGURES_DIR.
-            - Use descriptive filenames for figures.
-            """
+    def generate(self, instruction, num_features, cat_features, data_preview, error_context = None) -> str:
+        error_block = ""
+        if error_context:
+            error_block = f"""
+        PREVIOUS EXECUTION ERROR (FIX THIS):
+        {error_context}
+
+        RULE:
+        - Do NOT repeat the same mistake
+        - Ensure all variables are defined before use
+        """
+        prompt = f"""You are an expert data scientist. Generate Python code.
+
+                DATA:
+                {data_preview}
+
+                NUMERIC: {num_features}
+                CATEGORICAL: {cat_features}
+
+                {error_block}
+
+                TASK: {instruction}
+
+                CRITICAL RULES:
+                1. DataFrame 'df' is ALREADY LOADED - NEVER use pd.read_csv/excel
+                2. Variables: df, num_features, cat_features, plt, sns, px, go, stats, np, pd, FIGURES_DIR
+                3. Save plots: os.path.join(FIGURES_DIR, 'name.png')
+                4. ALWAYS plt.close() after plt.savefig()
+                5. Every code block MUST BE SELF-CONTAINED. 
+                6. If you need a filtered dataframe (like df_clean), you MUST define it 
+                inside the current code block using 'df'.
+                7. Do not assume variables from previous steps exist.
+
+                ERROR PREVENTION:
+                - Check dtypes: df[col].dtype
+                - Convert times: pd.to_timedelta(df[col]).dt.total_seconds()
+                - Ensure numeric: df[col] = pd.to_numeric(df[col], errors='coerce')
+                - Handle NaN: df.dropna(subset=[col])
+                - Use pd.isna() not .isnull() on scalars
+                - Check column exists: if col in df.columns
+
+                QUALITY:
+                - Descriptive titles, labels, legends
+                - Appropriate plot types
+                - Good font sizes, DPI=150
+                - Statistical tests with p-values
+                - Print results
+
+                OUTPUT: Pure Python only. NO markdown, NO backticks."""
         response = self.client.responses.create(
             model=self.model,
-            input=prompt,
-        )
+            input=prompt,)
         
         # Track usage - try to access usage attribute safely
         if hasattr(response, 'usage') and response.usage is not None:
@@ -926,10 +675,10 @@ class CodexGenerator:
         return response.output_text.strip()
 
 # ======================================================
-# 5. REACT ORCHESTRATOR
+# ReAct Orchestrator
 # ======================================================
 class ReActAnalyzer:
-    def __init__(self, runner, decider, coder, tracker: UsageTracker, max_steps=20, verbose=False):
+    def __init__(self, runner, decider, coder, tracker, max_steps=20, verbose=False):
         self.runner = runner
         self.decider = decider
         self.coder = coder
@@ -938,49 +687,56 @@ class ReActAnalyzer:
         self.verbose = verbose
         self.observations = []
         self.analysis_log = []
-        self.error_history = []  # Track errors to avoid repeating them
+        self.error_history = []
         self.data_preview = self.runner.df.head(10).to_string()
 
     def observe(self):
         figs = sorted(self.runner.figures_dir.glob("*.png"))
-        obs = f"- Figures: {len(figs)}\n- Files: " + ", ".join([f.name for f in figs]) if figs else "- No figs."
+        obs = f"Figures: {len(figs)} - " + ", ".join([f.name for f in figs]) if figs else "No figures"
         self.observations.append(obs)
 
     def run(self, user_requirements): 
-        print(f"\n🔬 STARTING ANALYSIS (Iteration 6.6 - Token Tracking)\n{'='*70}")
+        print(f"\n🔬 STARTING ANALYSIS\n{'='*80}")
         self.observe()
         
         for step in range(self.max_steps):
             print(f"\n🔄 STEP {step + 1}/{self.max_steps}")
             
-            # Include error history in context
             error_context = ""
             if self.error_history:
-                recent_errors = self.error_history[-3:]  # Last 3 errors
-                error_context = "\n\nRECENT ERRORS TO AVOID:\n" + "\n".join([
-                    f"- Error: {e['error']}\n  From action: {e['action'][:100]}..."
-                    for e in recent_errors
+                recent = self.error_history[-3:]
+                error_context = "\n\nRECENT ERRORS:\n" + "\n".join([
+                    f"- {e['error']}\n  From: {e['action'][:100]}..."
+                    for e in recent
                 ])
             
             decision = self.decider.decide(
                 "\n".join(self.observations) + error_context, 
-                step, 
-                self.max_steps, 
+                step, self.max_steps, 
                 self.runner.num_features, 
                 self.runner.cat_features, 
                 self.data_preview
             )
             
             if "STOP" in decision.upper(): 
-                print("🛑 Analysis complete (STOP signal received)")
+                print("🛑 Analysis complete")
                 break
-            
-            code = self.coder.generate(decision, self.runner.num_features, self.runner.cat_features, self.data_preview)
-            
+                        
+            last_error = None
+            if self.error_history:
+                last_error = self.error_history[-1]["error"]
+
+            code = self.coder.generate(
+                decision,
+                self.runner.num_features,
+                self.runner.cat_features,
+                self.data_preview,
+                error_context=last_error
+            )
+
             try:
                 self.runner.run(code)
-                if self.verbose: print("⚡ Success.")
-                # Clear error on success
+                if self.verbose: print("✅ Success")
                 self.observe()
                 self.analysis_log.append({
                     "step": step + 1, 
@@ -992,15 +748,13 @@ class ReActAnalyzer:
                 error_msg = str(e)
                 print(f"❌ Error: {error_msg}")
                 
-                # Store error for context
                 self.error_history.append({
                     "step": step + 1,
                     "action": decision,
                     "error": error_msg
                 })
                 
-                # Add error to observations
-                error_obs = f"- ERROR in step {step + 1}: {error_msg}"
+                error_obs = f"ERROR: {error_msg}"
                 self.observations.append(error_obs)
                 
                 self.analysis_log.append({
@@ -1010,12 +764,19 @@ class ReActAnalyzer:
                     "status": "error"
                 })
 
-        report_text = self.decider.synthesize_report(self.analysis_log, user_requirements, self.runner.figures_dir, self.data_preview)
+        report_text = self.decider.synthesize_report(
+            self.analysis_log, 
+            user_requirements, 
+            self.runner.figures_dir, 
+            self.data_preview
+        )
+        
         report_path = self.runner.output_dir / "report.md" 
         report_path.write_text(report_text, encoding='utf-8')
-        print(f"✨ Analysis complete. Report saved to {report_path}")
+        print(f"✨ Report saved: {report_path}")
         
         return report_path, report_text
+
 
 # ======================================================
 # 6. CLI
@@ -1045,6 +806,7 @@ def main():
     input_path = Path(args.input)
     output_path = Path(args.output)
     output_dir = output_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load custom prompt if provided
     custom_prompt = None
@@ -1067,7 +829,7 @@ def main():
     decider = DecisionMaker(api_key, tracker, custom_prompt=custom_prompt, verbose=args.verbose)
     coder = CodexGenerator(api_key, tracker, verbose=args.verbose)
 
-    analyzer = ReActAnalyzer(runner, decider, coder, tracker, max_steps=5, verbose=args.verbose)
+    analyzer = ReActAnalyzer(runner, decider, coder, tracker, max_steps=15, verbose=args.verbose)
     
     # Use custom prompt if provided, otherwise use default
     if custom_prompt:
@@ -1082,43 +844,34 @@ def main():
         out_file = output_path.with_suffix(f".{args.format}")
         
         if args.format == "pptx":
-            # Generate presentation-optimized content
-            pptx_content, domain_context = decider.synthesize_presentation(
-                analyzer.analysis_log, 
-                runner.figures_dir, 
-                analyzer.data_preview
-            )
-            
-            # Generate title image with DALL-E
-            title_image_path = runner.figures_dir / "title_image.png"
-            generated_image = decider.generate_title_image(domain_context, title_image_path)
-            
-            # If image was generated, add it to the title slide
-            if generated_image:
-                # Insert image reference after the first slide
-                lines = pptx_content.split('\n')
-                insert_index = None
-                for i, line in enumerate(lines):
-                    if line.strip() == '---' and insert_index is None:
-                        insert_index = i
-                        break
-                
-                if insert_index:
-                    lines.insert(insert_index, '\n![](figures/title_image.png)\n')
-                    pptx_content = '\n'.join(lines)
-            
-            pptx_md_path = output_dir / "presentation.md"
-            pptx_md_path.write_text(pptx_content, encoding='utf-8')
-            print(f"📊 Presentation markdown saved to {pptx_md_path}")
-            
-            # Create reference document with styling
-            ref_path = create_styled_reference(output_dir, runner.figures_dir)
-            
+            # ---- Presentation synthesis ----
+            if hasattr(decider, "synthesize_presentation"):
+                pptx_content, domain_context = decider.synthesize_presentation(
+                    analyzer.analysis_log,
+                    runner.figures_dir,
+                    analyzer.data_preview
+                )
+            else:
+                print("⚠️  synthesize_presentation() not implemented, using report.md")
+                pptx_content = report_text
+                domain_context = "Automated data analysis presentation"
+
+            # ---- Optional title image ----
+            generated_image = False
+            if hasattr(decider, "generate_title_image"):
+                title_image_path = runner.figures_dir / "title_image.png"
+                generated_image = decider.generate_title_image(domain_context, title_image_path)
+
+            # ---- Optional reference doc ----
+            ref_path = None
+            if "create_styled_reference" in globals():
+                ref_path = create_styled_reference(output_dir, runner.figures_dir)
+
             # Build Pandoc command
             pandoc_cmd = ["pandoc"]
             
             # Input file (must be relative to cwd)
-            pandoc_cmd.extend([str(pptx_md_path.name)])
+            pandoc_cmd.extend([str(report_md_path.name)])
             
             # Output format and file
             pandoc_cmd.extend(["-t", "pptx", "-o", str(out_file.name)])
@@ -1128,7 +881,8 @@ def main():
                 pandoc_cmd.extend([f"--reference-doc={ref_path.name}"])
             
             # Resource path for images (absolute path is safer)
-            pandoc_cmd.extend([f"--resource-path=.:figures:{runner.figures_dir.absolute()}"])
+            res_paths = [".", "figures", str(runner.figures_dir.absolute())]
+            pandoc_cmd.append(f"--resource-path={os.pathsep.join(res_paths)}")
             
             # Add standalone flag to ensure complete document
             pandoc_cmd.append("--standalone")
@@ -1153,22 +907,28 @@ def main():
                 # Fallback: try without reference doc
                 pandoc_cmd_simple = [
                     "pandoc",
-                    str(pptx_md_path.name),
+                    str(report_md_path.name),
                     "-t", "pptx",
                     "-o", str(out_file.name),
-                    f"--resource-path=.:figures:{runner.figures_dir.absolute()}",
+                    f"--resource-path={os.pathsep.join(['.', 'figures', str(runner.figures_dir.absolute())])}",
                     "--standalone"
                 ]
                 subprocess.run(pandoc_cmd_simple, cwd=output_dir, check=True)
                 print(f"✅ Presentation saved to {out_file} (with default styling)")
         else:
             # For PDF and DOCX, use the full report
-            subprocess.run(
-                ["pandoc", report_md_path.name, "-o", out_file.name],
-                cwd=output_dir
-            )
-            print(f"✅ Document saved to {out_file}")
-    
+            try:
+                subprocess.run(
+                    ["pandoc", report_md_path.name, "-o", out_file.name],
+                    cwd=output_dir,
+                    check=True
+                )
+                print(f"✅ Document saved to {out_file}")
+            except FileNotFoundError:
+                print("❌ Pandoc not installed or not in PATH")
+            except subprocess.CalledProcessError as e:
+                print("❌ Pandoc failed:", e)
+            
     # Print token usage LAST (after all processing is complete)
     print("\n" + "="*70)
     tracker.print_summary()
