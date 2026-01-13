@@ -74,6 +74,8 @@ class UsageTracker:
             "gpt-4-turbo": {"input": 10.00 / 1_000_000, "output": 30.00 / 1_000_000},
             "gpt-4": {"input": 30.00 / 1_000_000, "output": 60.00 / 1_000_000},
             "gpt-3.5-turbo": {"input": 0.50 / 1_000_000, "output": 1.50 / 1_000_000},
+            "dall-e-3": {"standard_1024": 0.040, "standard_1792": 0.080, "hd_1024": 0.080, "hd_1792": 0.120},  # per image
+            "dall-e-2": {"1024": 0.020, "512": 0.018, "256": 0.016},  # per image
         }
         
         # Try to map model names to pricing (handle version suffixes)
@@ -134,6 +136,20 @@ class UsageTracker:
         
         self.models[model].add(prompt, completion)
     
+    def record_image(self, model: str, num_images: int = 1, size: str = "1024x1024", quality: str = "standard"):
+        """Record image generation usage"""
+        if model not in self.models:
+            self.models[model] = TokenUsage()
+        
+        # Image generation doesn't use tokens in the traditional sense
+        # We'll store the count in a special way
+        self.models[model].add(num_images, 0)  # Store image count as "prompt tokens"
+        
+        # Store size and quality for cost calculation
+        if not hasattr(self.models[model], 'image_specs'):
+            self.models[model].image_specs = []
+        self.models[model].image_specs.append({'size': size, 'quality': quality})
+    
     def print_summary(self):
         """Print detailed usage summary with cost estimates"""
         print("\n" + "="*70)
@@ -147,22 +163,51 @@ class UsageTracker:
         
         for model, usage in self.models.items():
             print(f"\n🤖 Model: {model}")
-            print(f"   Prompt tokens:     {usage.prompt_tokens:,}")
-            print(f"   Completion tokens: {usage.completion_tokens:,}")
-            print(f"   Total tokens:      {usage.total_tokens:,}")
             
-            # Cost calculation
-            if model in pricing:
-                input_cost = usage.prompt_tokens * pricing[model]["input"]
-                output_cost = usage.completion_tokens * pricing[model]["output"]
-                model_cost = input_cost + output_cost
-                total_cost += model_cost
+            # Check if this is an image model
+            if 'dall-e' in model.lower() or 'image' in model.lower():
+                num_images = usage.prompt_tokens  # We stored image count here
+                print(f"   Images generated:  {num_images}")
                 
-                print(f"   Input cost:        ${input_cost:.6f}")
-                print(f"   Output cost:       ${output_cost:.6f}")
-                print(f"   Total cost:        ${model_cost:.6f}")
+                if hasattr(usage, 'image_specs') and model in pricing:
+                    model_cost = 0
+                    for spec in usage.image_specs:
+                        size = spec['size']
+                        quality = spec['quality']
+                        
+                        # Calculate cost based on size and quality
+                        if 'dall-e-3' in model.lower():
+                            if quality == 'hd':
+                                cost_per_image = pricing[model].get(f"hd_{size.split('x')[0]}", 0.080)
+                            else:
+                                cost_per_image = pricing[model].get(f"standard_{size.split('x')[0]}", 0.040)
+                        else:  # DALL-E 2
+                            cost_per_image = pricing[model].get(size.split('x')[0], 0.020)
+                        
+                        model_cost += cost_per_image
+                        print(f"   Size: {size}, Quality: {quality}")
+                        print(f"   Cost per image:    ${cost_per_image:.4f}")
+                    
+                    total_cost += model_cost
+                    print(f"   Total cost:        ${model_cost:.6f}")
             else:
-                print(f"   Cost:              Unknown pricing for this model")
+                # Regular token-based model
+                print(f"   Prompt tokens:     {usage.prompt_tokens:,}")
+                print(f"   Completion tokens: {usage.completion_tokens:,}")
+                print(f"   Total tokens:      {usage.total_tokens:,}")
+                
+                # Cost calculation
+                if model in pricing:
+                    input_cost = usage.prompt_tokens * pricing[model]["input"]
+                    output_cost = usage.completion_tokens * pricing[model]["output"]
+                    model_cost = input_cost + output_cost
+                    total_cost += model_cost
+                    
+                    print(f"   Input cost:        ${input_cost:.6f}")
+                    print(f"   Output cost:       ${output_cost:.6f}")
+                    print(f"   Total cost:        ${model_cost:.6f}")
+                else:
+                    print(f"   Cost:              Unknown pricing for this model")
         
         print(f"\n{'='*70}")
         print(f"💰 TOTAL ESTIMATED COST: ${total_cost:.6f}")
@@ -184,19 +229,45 @@ class UsageTracker:
             total_cost = 0.0
             for model, usage in self.models.items():
                 f.write(f"Model: {model}\n")
-                f.write(f"  Prompt tokens:     {usage.prompt_tokens:,}\n")
-                f.write(f"  Completion tokens: {usage.completion_tokens:,}\n")
-                f.write(f"  Total tokens:      {usage.total_tokens:,}\n")
                 
-                if model in pricing:
-                    input_cost = usage.prompt_tokens * pricing[model]["input"]
-                    output_cost = usage.completion_tokens * pricing[model]["output"]
-                    model_cost = input_cost + output_cost
-                    total_cost += model_cost
+                if 'dall-e' in model.lower() or 'image' in model.lower():
+                    num_images = usage.prompt_tokens
+                    f.write(f"  Images generated:  {num_images}\n")
                     
-                    f.write(f"  Input cost:        ${input_cost:.6f}\n")
-                    f.write(f"  Output cost:       ${output_cost:.6f}\n")
-                    f.write(f"  Total cost:        ${model_cost:.6f}\n")
+                    if hasattr(usage, 'image_specs') and model in pricing:
+                        model_cost = 0
+                        for spec in usage.image_specs:
+                            size = spec['size']
+                            quality = spec['quality']
+                            
+                            if 'dall-e-3' in model.lower():
+                                if quality == 'hd':
+                                    cost_per_image = pricing[model].get(f"hd_{size.split('x')[0]}", 0.080)
+                                else:
+                                    cost_per_image = pricing[model].get(f"standard_{size.split('x')[0]}", 0.040)
+                            else:
+                                cost_per_image = pricing[model].get(size.split('x')[0], 0.020)
+                            
+                            model_cost += cost_per_image
+                            f.write(f"  Size: {size}, Quality: {quality}\n")
+                            f.write(f"  Cost per image:    ${cost_per_image:.4f}\n")
+                        
+                        total_cost += model_cost
+                        f.write(f"  Total cost:        ${model_cost:.6f}\n")
+                else:
+                    f.write(f"  Prompt tokens:     {usage.prompt_tokens:,}\n")
+                    f.write(f"  Completion tokens: {usage.completion_tokens:,}\n")
+                    f.write(f"  Total tokens:      {usage.total_tokens:,}\n")
+                    
+                    if model in pricing:
+                        input_cost = usage.prompt_tokens * pricing[model]["input"]
+                        output_cost = usage.completion_tokens * pricing[model]["output"]
+                        model_cost = input_cost + output_cost
+                        total_cost += model_cost
+                        
+                        f.write(f"  Input cost:        ${input_cost:.6f}\n")
+                        f.write(f"  Output cost:       ${output_cost:.6f}\n")
+                        f.write(f"  Total cost:        ${model_cost:.6f}\n")
                 
                 f.write("\n")
             
@@ -420,8 +491,6 @@ class DecisionMaker:
         
         [Subtitle with context]
         
-        **Domain Context Image**: [Describe what kind of image would represent this domain - be specific, e.g., "triathlon athlete crossing finish line", "stock market trading floor", "hospital emergency room"]
-        
         ---
         
         # Executive Summary
@@ -476,7 +545,6 @@ class DecisionMaker:
         - Place image AFTER the bullet points on each findings slide
         - Create ONE slide per figure
         - Use --- to separate slides
-        - Include the domain context image description for the title slide
         
         OTHER RULES:
         - Maximum 5 bullets per slide
@@ -496,7 +564,56 @@ class DecisionMaker:
         if hasattr(response, 'usage'):
             self.tracker.record(self.model, response.usage)
         
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        
+        # Extract domain context for image generation
+        domain_match = re.search(r'#\s*(.+?)(?:\n|$)', content)
+        if domain_match:
+            title = domain_match.group(1).strip()
+            # Generate a short domain description from the title
+            domain_context = f"professional, minimalist illustration representing {title}"
+        else:
+            domain_context = "professional data analysis presentation"
+        
+        return content, domain_context
+    
+    def generate_title_image(self, domain_context: str, output_path: Path):
+        """Generate a title slide image using DALL-E"""
+        if self.verbose: print(f"🎨 Generating title image: {domain_context}")
+        
+        # Create a refined prompt for DALL-E
+        image_prompt = f"""
+        Create a professional, modern, minimalist cover image for a business presentation.
+        Theme: {domain_context}
+        Style: Clean, corporate, high-quality photography or digital art
+        Composition: Centered focal point with negative space for text overlay
+        Colors: Professional color palette with blue/gray tones
+        NO text, NO numbers, NO labels in the image
+        """
+        
+        try:
+            response = self.client.images.generate(
+                model="dall-e-3",
+                prompt=image_prompt,
+                size="1792x1024",  # Wide format for presentation
+                quality="standard",
+                n=1
+            )
+            
+            # Track image generation usage
+            self.tracker.record_image("dall-e-3", num_images=1, size="1792x1024", quality="standard")
+            
+            # Download the image
+            import urllib.request
+            image_url = response.data[0].url
+            urllib.request.urlretrieve(image_url, output_path)
+            
+            print(f"✅ Title image saved to: {output_path}")
+            return output_path
+            
+        except Exception as e:
+            print(f"⚠️  Failed to generate title image: {e}")
+            return None
 
     def decide(self, observations: str, step_num: int, max_steps: int, 
            num_features: list, cat_features: list, data_preview: str) -> str:
@@ -544,10 +661,31 @@ class CodexGenerator:
             DATA PREVIEW: {data_preview}
             TASK: {instruction}
             
-            RULES:
-            - If columns contain time strings (e.g., HH:MM:SS), you MUST use pd.to_timedelta() and .dt.total_seconds() before plotting.
+            CRITICAL RULES FOR DATA TYPE HANDLING:
+            - ALWAYS check column dtypes before plotting: df[col].dtype
+            - If a column contains time strings (e.g., HH:MM:SS), use pd.to_timedelta() and .dt.total_seconds()
+            - If a column is 'object' dtype but should be numeric, use pd.to_numeric(df[col], errors='coerce')
+            - Before ANY plotting operation, ensure numeric columns are actually numeric: df[col] = pd.to_numeric(df[col], errors='coerce')
+            - Drop NaN values after conversion: df = df.dropna(subset=[col])
+            - For categorical data in plots, convert to string explicitly: df[col].astype(str)
+            
+            EXAMPLE SAFE PATTERN:
+            ```python
+            # Ensure numeric
+            df['column'] = pd.to_numeric(df['column'], errors='coerce')
+            df = df.dropna(subset=['column'])
+            
+            # Now plot
+            plt.figure(figsize=(10,6))
+            plt.plot(df['column'])
+            plt.savefig(os.path.join(FIGURES_DIR, 'plot.png'))
+            plt.close()
+            ```
+            
+            OTHER RULES:
             - OUTPUT PYTHON CODE ONLY. NO Markdown.
             - ALWAYS save to FIGURES_DIR.
+            - Use descriptive filenames for figures.
             """
         response = self.client.responses.create(
             model=self.model,
@@ -573,6 +711,7 @@ class ReActAnalyzer:
         self.verbose = verbose
         self.observations = []
         self.analysis_log = []
+        self.error_history = []  # Track errors to avoid repeating them
         self.data_preview = self.runner.df.head(10).to_string()
 
     def observe(self):
@@ -586,20 +725,63 @@ class ReActAnalyzer:
         
         for step in range(self.max_steps):
             print(f"\n🔄 STEP {step + 1}/{self.max_steps}")
-            decision = self.decider.decide("\n".join(self.observations), step, self.max_steps, self.runner.num_features, self.runner.cat_features, self.data_preview)
             
-            if "STOP" in decision.upper(): break
+            # Include error history in context
+            error_context = ""
+            if self.error_history:
+                recent_errors = self.error_history[-3:]  # Last 3 errors
+                error_context = "\n\nRECENT ERRORS TO AVOID:\n" + "\n".join([
+                    f"- Error: {e['error']}\n  From action: {e['action'][:100]}..."
+                    for e in recent_errors
+                ])
+            
+            decision = self.decider.decide(
+                "\n".join(self.observations) + error_context, 
+                step, 
+                self.max_steps, 
+                self.runner.num_features, 
+                self.runner.cat_features, 
+                self.data_preview
+            )
+            
+            if "STOP" in decision.upper(): 
+                print("🛑 Analysis complete (STOP signal received)")
+                break
             
             code = self.coder.generate(decision, self.runner.num_features, self.runner.cat_features, self.data_preview)
             
             try:
                 self.runner.run(code)
                 if self.verbose: print("⚡ Success.")
+                # Clear error on success
+                self.observe()
+                self.analysis_log.append({
+                    "step": step + 1, 
+                    "thought": decision, 
+                    "result": self.observations[-1],
+                    "status": "success"
+                })
             except Exception as e:
-                print(f"❌ Error: {e}")
-            
-            self.observe()
-            self.analysis_log.append({"step": step + 1, "thought": decision, "result": self.observations[-1]})
+                error_msg = str(e)
+                print(f"❌ Error: {error_msg}")
+                
+                # Store error for context
+                self.error_history.append({
+                    "step": step + 1,
+                    "action": decision,
+                    "error": error_msg
+                })
+                
+                # Add error to observations
+                error_obs = f"- ERROR in step {step + 1}: {error_msg}"
+                self.observations.append(error_obs)
+                
+                self.analysis_log.append({
+                    "step": step + 1, 
+                    "thought": decision, 
+                    "result": error_obs,
+                    "status": "error"
+                })
 
         report_text = self.decider.synthesize_report(self.analysis_log, user_requirements, self.runner.figures_dir, self.data_preview)
         report_path = self.runner.output_dir / "report.md" 
@@ -633,7 +815,7 @@ def main():
     decider = DecisionMaker(api_key, tracker, verbose=args.verbose)
     coder = CodexGenerator(api_key, tracker, verbose=args.verbose)
 
-    analyzer = ReActAnalyzer(runner, decider, coder, tracker, max_steps=5, verbose=args.verbose)
+    analyzer = ReActAnalyzer(runner, decider, coder, tracker, max_steps=15, verbose=args.verbose)
     report_md_path, report_text = analyzer.run("Comprehensive domain-specific report with embedded figures.") 
 
     if args.format:
@@ -642,21 +824,33 @@ def main():
         
         if args.format == "pptx":
             # Generate presentation-optimized content
-            pptx_content = decider.synthesize_presentation(
+            pptx_content, domain_context = decider.synthesize_presentation(
                 analyzer.analysis_log, 
                 runner.figures_dir, 
                 analyzer.data_preview
             )
+            
+            # Generate title image with DALL-E
+            title_image_path = runner.figures_dir / "title_image.png"
+            generated_image = decider.generate_title_image(domain_context, title_image_path)
+            
+            # If image was generated, add it to the title slide
+            if generated_image:
+                # Insert image reference after the first slide
+                lines = pptx_content.split('\n')
+                insert_index = None
+                for i, line in enumerate(lines):
+                    if line.strip() == '---' and insert_index is None:
+                        insert_index = i
+                        break
+                
+                if insert_index:
+                    lines.insert(insert_index, '\n![](figures/title_image.png)\n')
+                    pptx_content = '\n'.join(lines)
+            
             pptx_md_path = output_dir / "presentation.md"
             pptx_md_path.write_text(pptx_content, encoding='utf-8')
             print(f"📊 Presentation markdown saved to {pptx_md_path}")
-            
-            # Extract domain image suggestion from content
-            domain_image_match = re.search(r'\*\*Domain Context Image\*\*:\s*(.+?)(?:\n|$)', pptx_content)
-            if domain_image_match:
-                domain_context = domain_image_match.group(1).strip()
-                print(f"💡 Suggested title image: {domain_context}")
-                print(f"   → Search for this on Unsplash/Pexels and add to title slide manually")
             
             # Create reference document with styling
             ref_path = create_styled_reference(output_dir, runner.figures_dir)
