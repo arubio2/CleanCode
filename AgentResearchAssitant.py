@@ -380,16 +380,18 @@ class SafeRunner:
         self.df = df
         self.num_features = num_features
         self.cat_features = cat_features
-        self.output_dir = output_dir.resolve() 
-        self.verbose = verbose
-        self.figures_dir = self.output_dir / "figures"
+        # FIX: Prevent nesting if the output path is already the figures directory
+        # FIX: Use the passed output_dir and prevent "figures/figures" nesting
+        self.output_dir = Path(output_dir).absolute()
         
-        if self.figures_dir.exists():
-            if self.verbose: print(f"🧹 Cleaning old figures...")
-            robust_rmtree(self.figures_dir)
-        
+        if self.output_dir.name.lower() == "figures":
+            self.figures_dir = self.output_dir
+        else:
+            self.figures_dir = self.output_dir / "figures"
+            
         self.figures_dir.mkdir(parents=True, exist_ok=True)
-    
+        
+            
     def run(self, code):
         assert "exec(" not in code.lower(), "Generated code must not call exec()"
 
@@ -424,12 +426,15 @@ class SafeRunner:
             "os": os
         }
         
+        # FIX: Strip any existing 'figures/' prefix to prevent double-nesting
+        # This replaces "figures/any_name.png" OR "any_name.png" with the absolute path
+        # FIX: Strip 'figures/' if the AI already included it to prevent double nesting
+        abs_fig_path = str(self.figures_dir).replace('\\', '/')
         code = re.sub(
-            r"plt\.savefig\(\s*['\"]([^'\"]+\.png)['\"]\s*\)",
-            r"plt.savefig(os.path.join(FIGURES_DIR, '\1'))",
-            code)
-
-
+            r"['\"](?:figures/)?([^'\"\s]+\.png)['\"]", 
+            f"'{abs_fig_path}/\\1'", 
+            code
+        )
         old_cwd = os.getcwd()
         os.chdir(self.figures_dir)
 
