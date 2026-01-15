@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-IAthon – Iteration 13 (All Fixes Applied)
+IAthon
 - Live pricing fetch from OpenAI with fallbacks
 - Prevents file reading errors
 - Generates comprehensive Markdown reports
