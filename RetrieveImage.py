@@ -37,7 +37,7 @@ def download_image(search_query, api_key, file_name="downloaded_image.jpg"):
         print("No images found for that description.")
 
 # --- Usage ---
-API_KEY = "bIlNk10qnmExw0ookjjiv1w7lkNREsDPCRDrzfZBVXemQ9TDQp2NMq62" # Replace with your actual key
+API_KEY = "MySuperKey" # Replace with your actual key
 query = "Performance of students given different characteristics"
 
 download_image(query, API_KEY)
