@@ -154,12 +154,8 @@ python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/r
 ### 2.1 Generate PowerPoint Report
 Convert an existing Markdown report to PowerPoint:
 
-```bash
-python md_to_ppt.py \
-  --md results/report.md \
-  --pptx template.pptx \
-  --api_key $env:OPENAI_API_KEY \
-  --output results/presentation.pptx
+```powershell
+python md_to_ppt.py --md results/report.md --pptx template.pptx --api_key $env:OPENAI_API_KEY --output results/presentation.pptx
 ```
 ### 2.1 Generate PowerPoint Report from scratch
 ```powershell
@@ -191,7 +187,7 @@ download_image("technology innovation", "your_pexels_api_key", "tech.jpg")
 ### Advanced Options (if you want to modify the prompt)
 
 ```powershell
-python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pptx --max-steps 7 --verbose --prompt "Focus on gender disparities and test score correlations"
+python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pdf --max-steps 7 --verbose --prompt "Focus on gender disparities and test score correlations"
 ```
 
 ### Custom Analysis Prompt
