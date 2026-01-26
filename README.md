@@ -142,20 +142,21 @@ $env:OPENAI_API_KEY="sk-proj-your-actual-key-from-IAckathon"
 
 ## Usage
 
-### Basic Usage
+### 1. Basic Usage
 
-Analyze a CSV file and generate a Markdown report:
+Analyze a CSV file and generate a Markdown report with a PDF report:
+
 
 ```powershell
-python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md
+python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pdf
 ```
 
-### 1.1 Generate PowerPoint Report
+### 2.1 Generate PowerPoint Report
 
 ```powershell
 python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pptx
 ```
-### 1.2 Advanced Usage to Generate PowerPoint Report (in case option 1.1 is slow)
+### 2.2 Advanced Usage to Generate PowerPoint Report (in case option 1.1 is slow)
 
 ##### Standalone Markdown to PowerPoint
 
@@ -167,13 +168,6 @@ python md_to_ppt.py \
   --pptx template.pptx \
   --api_key $OPENAI_API_KEY \
   --output results/presentation.pptx
-```
-
-
-### 2. Generate PDF Report
-
-```powershell
-python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pdf
 ```
 
 ### 3. Download Illustrative Images
