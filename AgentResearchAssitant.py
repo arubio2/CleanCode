@@ -712,7 +712,7 @@ class DecisionMaker:
         self.tracker = tracker
         self.custom_prompt = custom_prompt
         self.verbose = verbose
-        self.model = "gpt-5-mini"
+        self.model = "gpt-4o-mini"
     
     def decide(self, observations: str, step_num: int, max_steps: int, 
             num_features: list, cat_features: list, data_preview: str) -> str:
@@ -901,7 +901,7 @@ class CodexGenerator:
         self.client = OpenAI(api_key=api_key)
         self.tracker = tracker
         self.verbose = verbose
-        self.model = "gpt-5.1-codex-mini"
+        self.model = "gpt-4o-mini"
 
     def generate(self, instruction, num_features, cat_features, data_preview, error_context=None) -> str:
         """Enhanced code generation optimized for batch analysis requests"""
