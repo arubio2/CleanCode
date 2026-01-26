@@ -162,6 +162,28 @@ python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/r
 python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pdf
 ```
 
+### Download Illustrative Images
+
+You can also enhance your presentations with illustrative images downloaded from Pexels. Use `RetrieveImage.py` to download contextual images:
+
+> **⚠️ Pexels API Key Required:**
+> You need a Pexels API key to use this feature. Get your free API key at [pexels.com/api](https://www.pexels.com/api/).
+
+```python
+from RetrieveImage import download_image
+
+# Parameters: search_query, pexels_api_key, output_filename
+download_image("data analysis", "your_pexels_api_key", "analysis.jpg")
+```
+
+**Example usage:**
+```python
+# Download images for your presentation
+download_image("business charts", "your_pexels_api_key", "charts.jpg")
+download_image("team collaboration", "your_pexels_api_key", "teamwork.jpg")
+download_image("technology innovation", "your_pexels_api_key", "tech.jpg")
+```
+
 ### Advanced Options
 
 ```powershell
@@ -346,16 +368,6 @@ python md_to_ppt.py \
   --pptx template.pptx \
   --api_key $OPENAI_API_KEY \
   --output results/presentation.pptx
-```
-
-### Download Illustrative Images
-
-Use `RetrieveImage.py` to download contextual images from Pexels:
-
-```python
-from RetrieveImage import download_image
-
-download_image("data analysis", "your_pexels_api_key", "analysis.jpg")
 ```
 
 ---
