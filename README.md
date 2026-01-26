@@ -170,13 +170,13 @@ python md_to_ppt.py \
 ```
 
 
-### Generate PDF Report
+### 2. Generate PDF Report
 
 ```powershell
 python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pdf
 ```
 
-### Download Illustrative Images
+### 3. Download Illustrative Images
 
 You can also enhance your presentations with illustrative images downloaded from Pexels. Use `RetrieveImage.py` to download contextual images:
 
@@ -198,7 +198,7 @@ download_image("team collaboration", "your_pexels_api_key", "teamwork.jpg")
 download_image("technology innovation", "your_pexels_api_key", "tech.jpg")
 ```
 
-### Advanced Options
+### Advanced Options (if you want to modify the prompt)
 
 ```powershell
 python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pptx --max-steps 7 --verbose --prompt "Focus on gender disparities and test score correlations"
