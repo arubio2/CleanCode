@@ -155,6 +155,20 @@ python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/r
 ```powershell
 python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pptx
 ```
+## Advanced Usage to Generate PowerPoint Report
+
+### Standalone Markdown to PowerPoint
+
+Convert an existing Markdown report to PowerPoint:
+
+```bash
+python md_to_ppt.py \
+  --md results/report.md \
+  --pptx template.pptx \
+  --api_key $OPENAI_API_KEY \
+  --output results/presentation.pptx
+```
+
 
 ### Generate PDF Report
 
