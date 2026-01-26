@@ -174,7 +174,7 @@ You can enhance your presentations with illustrative images downloaded from Pexe
 1. Open `RetrieveImage.py` and update the API key and query:
 ```python
 API_KEY = "your_pexels_api_key"  # Replace with your actual key
-query = "data analysis visualization"
+query = ""Performance of students given different characteristics"" # Replace with your requirement
 ```
 
 2. Run the script:
@@ -183,6 +183,7 @@ python RetrieveImage.py
 ```
 
 **Option B: Import as a module in Python**
+# Edit and run the script in RetrieveImage.py
 ```python
 from RetrieveImage import download_image
 
@@ -195,7 +196,7 @@ download_image("team collaboration", "your_pexels_api_key", "teamwork.jpg")
 ### Advanced Options (if you want to modify the prompt)
 
 ```powershell
-python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pdf --max-steps 7 --verbose --prompt "Focus on gender disparities and test score correlations"
+python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pdf --verbose --prompt "Focus on gender disparities and test score correlations"
 ```
 
 ### Custom Analysis Prompt
@@ -216,7 +217,6 @@ python AgentResearchAssitant.py --input data.csv --output results/report.md --pr
 | `--output` | `-o` | Yes | Output path for report (`.md`) |
 | `--format` | `-f` | No | Output format: `pptx`, `pdf`, or `docx` |
 | `--api-key` | | No | OpenAI API key (overrides environment variable) |
-| `--max-steps` | | No | Max analysis iterations (default: 5) |
 | `--verbose` | `-v` | No | Enable detailed logging |
 | `--prompt` | `-p` | No | Custom analysis requirements |
 | `--prompt-file` | | No | Load custom prompt from file |
@@ -341,7 +341,6 @@ If you see permission errors when running the script, try:
 ### API Rate Limits
 
 If you hit OpenAI rate limits:
-- Reduce `--max-steps` (try 3-4 instead of 5)
 - Use smaller models in the code (edit model names in `AgentResearchAssitant.py`)
 - Wait a few minutes and retry
 
@@ -357,7 +356,6 @@ Typical analysis costs (using GPT-4 models):
 Costs vary based on:
 - Dataset complexity
 - Number of features
-- Analysis depth (`--max-steps`)
 - Model selection
 
 Check `token_usage.log` after each run for exact costs.
