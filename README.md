@@ -183,7 +183,7 @@ python RetrieveImage.py
 ```
 
 **Option B: Import as a module in Python**
-# Edit and run the script in RetrieveImage.py
+## Edit and run the script in RetrieveImage.py
 ```python
 from RetrieveImage import download_image
 
