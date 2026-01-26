@@ -164,24 +164,32 @@ python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/r
 
 ### 3. Download Illustrative Images
 
-You can also enhance your presentations with illustrative images downloaded from Pexels. Use `RetrieveImage.py` to download contextual images:
+You can enhance your presentations with illustrative images downloaded from Pexels. Use `RetrieveImage.py` to download contextual images.
 
 > **⚠️ Pexels API Key Required:**
 > You need a Pexels API key to use this feature. Get your free API key at [pexels.com/api](https://www.pexels.com/api/).
 
+**Option A: Edit and run the script directly**
+
+1. Open `RetrieveImage.py` and update the API key and query:
+```python
+API_KEY = "your_pexels_api_key"  # Replace with your actual key
+query = "data analysis visualization"
+```
+
+2. Run the script:
+```powershell
+python RetrieveImage.py
+```
+
+**Option B: Import as a module in Python**
 ```python
 from RetrieveImage import download_image
 
-# Parameters: search_query, pexels_api_key, output_filename
+# Parameters: search_query, api_key, file_name (optional, defaults to "downloaded_image.jpg")
 download_image("data analysis", "your_pexels_api_key", "analysis.jpg")
-```
-
-**Example usage:**
-```python
-# Download images for your presentation
 download_image("business charts", "your_pexels_api_key", "charts.jpg")
 download_image("team collaboration", "your_pexels_api_key", "teamwork.jpg")
-download_image("technology innovation", "your_pexels_api_key", "tech.jpg")
 ```
 
 ### Advanced Options (if you want to modify the prompt)
