@@ -150,12 +150,12 @@ Analyze a CSV file and generate a Markdown report:
 python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md
 ```
 
-### Generate PowerPoint Report
+### 1.1 Generate PowerPoint Report
 
 ```powershell
 python AgentResearchAssitant.py --input DataSets/yourfile.csv --output results/report.md --format pptx
 ```
-#### Advanced Usage to Generate PowerPoint Report
+### 1.2 Advanced Usage to Generate PowerPoint Report (in case option 1.1 is slow)
 
 ##### Standalone Markdown to PowerPoint
 
