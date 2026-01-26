@@ -158,7 +158,7 @@ Convert an existing Markdown report to PowerPoint:
 python md_to_ppt.py \
   --md results/report.md \
   --pptx template.pptx \
-  --api_key $OPENAI_API_KEY \
+  --api_key $env:OPENAI_API_KEY \
   --output results/presentation.pptx
 ```
 ### 2.1 Generate PowerPoint Report from scratch
