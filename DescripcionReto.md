@@ -23,9 +23,11 @@ El programa deberá leer la fuente de datos (uno o varios ficheros Excel, csv o 
 
 3. El informe contiene varios motivos relacionados con los propios datos que han sido seleccionados: fotos o ilustraciones. 
 
-4. Interfaz de usuario interactiva para la generación de los informes. 
+4. Interfaz de usuario interactiva para la generación de los informes.
+5. Incorporación de nuevos agentes.
+6. Calidad del informe.
 
-5. Gestión de recursos 
+7. Gestión de recursos
 
  ---
 
@@ -90,17 +92,16 @@ Los criterios de evaluación serán los siguientes:
 
 ### 1.2 Generación Automática del Informe (10%) 
 
-0 pts: No genera informes. 
+0 pts: No existe una arquitectura basada en agentes o esta no es funcional. 
 
-4 pts: Genera informes básicos sin gráficos ni tablas adecuadas. 
+4 pts: Los agentes producen texto genérico, sin análisis estructurado. 
 
-8 pts: Genera informes con gráficos y tablas adecuadas pero sin pies de figura ni contexto. 
+8 pts: El sistema utiliza múltiples agentes con roles diferenciados pero no todos los elementos están correctamente justificados o conectados entre sí. 
 
-10 pts: Los informes incluyen gráficos/tablas correctamente etiquetados y contextuales. 
+10 pts: Arquitectura de agentes bien definida y eficiente, donde cada agente tiene un rol claro y existe coordinación efectiva.
 
- 
 
-### 1.3 Formatos de Salida (5%) 
+### 1.4 Formatos de Salida (5%) 
 
 0 pts: Solo genera un formato de salida. 
 
@@ -112,7 +113,7 @@ Los criterios de evaluación serán los siguientes:
 
  
 
-### 1.4 Idiomas del Informe (5%) 
+### 1.5 Idiomas del Informe (5%) 
 
 0 pts: Solo soporta un idioma. 
 
@@ -124,19 +125,19 @@ Los criterios de evaluación serán los siguientes:
 
  
 
-### 1.5 Representación Visual y Etiquetado (10%) 
+### 1.6 Representación Visual y Etiquetado (10%) 
 
 0 pts: Gráficos ilegibles o mal etiquetados. 
 
 4 pts: Gráficos y tablas básicos con etiquetas claras pero poco detalladas. 
 
-8 pts: Representaciones legibles y detalladas, pero sin pies de figura/tabla. 
+8 pts: Representaciones legibles y etiquetadas, con pies de figura/tabla. 
 
-10 pts: Gráficos/tablas legibles, etiquetados, con pies de figura detallados. 
+10 pts: Gráficos/tablas legibles, etiquetados, con pies de figura detallados y descripciones adecuadas. 
 
  
 
-### 1.6 Interactividad (5%) 
+### 1.7 Interactividad (5%) 
 
 0 pts: Sin elementos interactivos. 
 
@@ -171,6 +172,7 @@ Los criterios de evaluación serán los siguientes:
 8 pts: Presentación clara y lógica, pero con limitaciones menores en la interpretación. 
 
 10 pts: Resultados claros, coherentes y relevantes, con interpretaciones significativas. 
+
 
 ### 2.3 Creatividad en los Resultados (5%) 
 
@@ -258,16 +260,40 @@ Los criterios de evaluación serán los siguientes:
 
 5 pts: Opinión altamente positiva, superando expectativas. 
 
- 
+## 5. Criterios adicionales (10%) 
+
+Se aplicará un 10% extra de puntuación a aquellos que cumplan los siguientes criterios en relación al uso de Agentes:
+
+**a) Diseño y número de agentes**
+
+Adecuación del número de agentes al problema.
+
+Justificación implícita o explícita de la división de tareas.
+
+**b) Coherencia inter-agente**
+
+Consistencia entre análisis, visualizaciones y conclusiones generadas por distintos agentes.
+
+Ausencia de contradicciones o repeticiones innecesarias.
+
+**c) Eficiencia y reutilización de información**
+
+Uso de resultados intermedios generados por agentes previos.
+
+Minimización de llamadas redundantes a modelos de IA.
+
+**d) Robustez del sistema**
+
+Capacidad del sistema para generar informes coherentes ante distintos tipos de datasets y objetivos.
 
 # Puntuación Total: 
 
-100 puntos posibles. 
+110 puntos posibles. 
 
-80-100 pts: Excelencia. Cumple con creces los objetivos propuestos. 
+90-110 pts: Excelencia. Cumple con creces los objetivos propuestos. 
 
-60-79 pts: Bueno. Cumple con la mayoría de los objetivos, con margen de mejora. 
+70-89 pts: Bueno. Cumple con la mayoría de los objetivos, con margen de mejora. 
 
-40-59 pts: Aceptable. Resultados básicos, pero insuficientes en profundidad o funcionalidad. 
+40-69 pts: Aceptable. Resultados básicos, pero insuficientes en profundidad o funcionalidad. 
 
 <40 pts: Insuficiente. No cumple con los requisitos mínimos. 
